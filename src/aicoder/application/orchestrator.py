@@ -86,17 +86,27 @@ class Orchestrator:
         ws = self._tool("git", "start_task", branch=branch)
         workdir = ws.get("worktree") or self._profile.target.repo_path
 
-        # ---- execute tasks ----
-        session.start_coding()  # PLANNING -> CODING (first task)
-        tasks = plan.tasks
-        for index, task in enumerate(tasks):
-            self._execute_task_with_healing(session, task, workdir)
+        # ---- coding phase: apply every task, each seeing the CURRENT state of
+        # ALL plan files (so a later task coordinates with earlier edits). We do
+        # NOT verify between tasks: a weak model over-decomposes a cohesive change
+        # into per-file tasks, and per-task verification fails on the unavoidable
+        # intermediate non-compiling states (and later tasks would undo earlier
+        # ones). Apply everything, then verify once and heal to green.
+        all_targets = _unique([f for task in plan.tasks for f in task.target_files])
+        session.start_coding()  # PLANNING -> CODING
+        for task in plan.tasks:
+            files = self._read_files(workdir, all_targets)
+            change = self._coder.apply_task(task, files)
+            self._apply_change(change, workdir)
+            self._log(
+                session, "DIFF_APPLIED", {"task": task.id, "files": [e.path for e in change.edits]}
+            )
+        self._memory.save_session(session)
+
+        # ---- verify + self-heal the whole change ----
+        if not self._verify_and_heal(session, prompt, all_targets, workdir):
             self._memory.save_session(session)
-            if session.state is SessionState.HEALING_FAILED:
-                return session
-            # task passed (we are in VERIFYING)
-            if index < len(tasks) - 1:
-                session.start_next_task()  # VERIFYING -> CODING (reset attempts)
+            return session
 
         session.record_pass()  # VERIFYING -> DONE
         self._tool("git", "commit", workdir=workdir, message=f"agent: {prompt[:60]}")
@@ -107,45 +117,53 @@ class Orchestrator:
     # ------------------------------------------------------------------ #
     # Per-task self-healing loop
     # ------------------------------------------------------------------ #
-    def _execute_task_with_healing(self, session: AgentSession, task: Task, workdir: str) -> None:
+    def _apply_change(self, change, workdir: str) -> None:
+        for edit in change.edits:
+            self._tool("git", "write_file", workdir=workdir, path=edit.path, content=edit.content)
+
+    def _verify_and_heal(
+        self, session: AgentSession, requirement: str, targets: list[str], workdir: str
+    ) -> bool:
+        """Verify the whole change; on failure, re-code with the error + the files
+        the compiler blamed, until green or the breaker trips. Returns True on pass.
+        Leaves the session in VERIFYING (pass) or HEALING_FAILED."""
+        read_paths = list(targets)
         error_context = ""
-        read_paths = list(task.target_files)  # widens to whatever the compiler blames
+        first = True
         while True:
-            files = self._read_files(workdir, read_paths)
-            change = self._coder.apply_task(task, files, error_context)
-            for edit in change.edits:
-                self._tool("git", "write_file", workdir=workdir, path=edit.path, content=edit.content)
-            self._log(session, "DIFF_APPLIED", {"task": task.id, "files": [e.path for e in change.edits]})
+            if not first:  # re-code a fix over the whole change
+                files = self._read_files(workdir, read_paths)
+                fix_task = Task(id="heal", description=requirement, target_files=read_paths)
+                change = self._coder.apply_task(fix_task, files, error_context)
+                self._apply_change(change, workdir)
+                self._log(
+                    session, "DIFF_APPLIED", {"task": "heal", "files": [e.path for e in change.edits]}
+                )
+            first = False
 
             session.start_verifying()  # CODING -> VERIFYING
             result = self._build.run_tests(
                 module=self._profile.target.sandbox_module, workdir=workdir
             )
-
             if result.passed:
-                self._log(session, "VERIFY_PASS", {"task": task.id})
-                return
+                self._log(session, "VERIFY_PASS", {})
+                return True
 
             signature = result.error_signature or _signature(result.evidence)
             self._log(
-                session,
-                "VERIFY_FAIL",
-                {"task": task.id, "failed_tests": result.failed_tests, "signature": signature},
+                session, "VERIFY_FAIL",
+                {"failed_tests": result.failed_tests, "signature": signature},
             )
             session.record_failure(signature)  # VERIFYING -> HEALING
-
             if session.should_trip_breaker():
                 session.trip_breaker()  # HEALING -> HEALING_FAILED
-                self._log(session, "HEALING_FAILED", {"task": task.id, "attempts": session.attempts})
-                return
+                self._log(session, "HEALING_FAILED", {"attempts": session.attempts})
+                return False
 
-            # Widen the Coder's view to every file the compiler blamed, so it can
-            # fix a break in a file the task didn't nominally target (the common
-            # case when a plan splits a cross-cutting change across tasks).
             for path in _files_from_evidence(workdir, result.evidence):
                 if path not in read_paths:
                     read_paths.append(path)
-                    self._log(session, "CONTEXT_WIDENED", {"task": task.id, "added": path})
+                    self._log(session, "CONTEXT_WIDENED", {"added": path})
 
             session.retry_coding()  # HEALING -> CODING
             error_context = _distill(result.failed_tests, result.evidence)
@@ -194,6 +212,16 @@ class Orchestrator:
 
 
 # ---------------------------------------------------------------------- #
+def _unique(items: list[str]) -> list[str]:
+    seen: set[str] = set()
+    out: list[str] = []
+    for it in items:
+        if it not in seen:
+            seen.add(it)
+            out.append(it)
+    return out
+
+
 def _new_session_id(seed: str) -> str:
     return "sess_" + hashlib.sha1(seed.encode("utf-8")).hexdigest()[:12]
 
