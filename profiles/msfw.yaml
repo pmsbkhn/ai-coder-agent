@@ -40,6 +40,6 @@ knowledge:
   golden_reference: "sample-service"
 
 healing:
-  max_attempts: 3                        # Circuit Breaker N (TC-CORE-06)
+  max_attempts: 6                        # Circuit Breaker N (TC-CORE-06)
   reset_to_clean: true                   # each attempt starts from a clean worktree
   no_progress_breaker: true              # trip early if the error signature repeats

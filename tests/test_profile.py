@@ -16,5 +16,5 @@ def test_msfw_profile_loads() -> None:
     assert p.build.mcp_server == "maven-server"
     assert p.build.result_parser == "surefire-xml"
     assert p.architecture.fitness == "archunit"
-    assert p.healing.max_attempts == 3
+    assert p.healing.max_attempts == 6
     assert "docs/SERVICE_ARCHITECTURE.md" in p.knowledge.seed_docs

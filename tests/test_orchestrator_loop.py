@@ -121,16 +121,17 @@ def test_self_heals_then_passes() -> None:
 
 
 def test_circuit_breaker_trips_after_n_attempts() -> None:
+    n = _PROFILE.healing.max_attempts
     plan = Plan(tasks=[Task(id="t1", description="add x", target_files=["A.java"])])
-    # distinct signatures so it's the attempt count (N=3), not no-progress, that trips
-    build = FakeBuild([_failed("s1"), _failed("s2"), _failed("s3")])
+    # distinct signatures so it's the attempt count (N), not no-progress, that trips
+    build = FakeBuild([_failed(f"s{i}") for i in range(n)])
     mem = InMemoryMemory()
     orch = _orchestrator(plan, build, memory=mem)
 
     session = orch.run_requirement("add field x")
 
     assert session.state is SessionState.HEALING_FAILED
-    assert session.attempts == 3
+    assert session.attempts == n
     assert "HEALING_FAILED" in [t.event_type for t in mem.get_traces(session.session_id)]
 
 
