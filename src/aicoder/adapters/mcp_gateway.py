@@ -106,5 +106,6 @@ def build_gateway_from_profile(
     servers = {
         "code-reader": ServerSpec(py, ["-m", "aicoder.mcp_servers.code_reader_server"], dict(env)),
         "maven": ServerSpec(py, ["-m", "aicoder.mcp_servers.maven_server"], dict(env)),
+        "git": ServerSpec(py, ["-m", "aicoder.mcp_servers.git_server"], dict(env)),
     }
     return MCPGatewayClient(servers)

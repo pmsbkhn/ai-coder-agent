@@ -81,6 +81,24 @@ class VerificationResult(BaseModel):
     analysis: str = ""                 # LLM root-cause explanation (advisory only)
 
 
+class FileEdit(BaseModel):
+    """A whole-file replacement produced by the Coder.
+
+    Full content (not a diff) is deliberate for the walking skeleton: it removes
+    the fragile diff-apply step. Aider-style search/replace is an M3 optimization.
+    """
+
+    path: str
+    content: str
+
+
+class CodeChange(BaseModel):
+    """The Coder's output for one task: the files it wants to (re)write."""
+
+    edits: list[FileEdit] = Field(default_factory=list)
+    notes: str = ""
+
+
 class ExecutionTrace(BaseModel):
     """One append-only record in the Immutable Memory."""
 

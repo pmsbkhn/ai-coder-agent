@@ -23,8 +23,12 @@ _MVN = shutil.which(os.environ.get("AICODER_MVN", "mvn")) or os.environ.get("AIC
 
 
 @mcp.tool()
-def run_tests(module: str = "", test: str = "") -> dict:
-    """Run `mvn test` (optionally scoped to a module / single test) and parse results."""
+def run_tests(module: str = "", test: str = "", workdir: str = "") -> dict:
+    """Run `mvn test` (optionally scoped to a module / single test) and parse results.
+
+    workdir overrides the repo root (e.g. a git worktree); defaults to AICODER_REPO_PATH.
+    """
+    root = Path(workdir).resolve() if workdir else _REPO
     cmd = [_MVN, "test"]
     if module:
         cmd += ["-pl", module]
@@ -32,9 +36,10 @@ def run_tests(module: str = "", test: str = "") -> dict:
         cmd += [f"-Dtest={test}"]
 
     proc = subprocess.run(  # noqa: S603 — mvn path resolved above
-        cmd, cwd=str(_REPO), capture_output=True, text=True, encoding="utf-8", errors="replace"
+        cmd, cwd=str(root), capture_output=True, text=True, encoding="utf-8", errors="replace",
+        stdin=subprocess.DEVNULL,
     )
-    summary = surefire.parse_reports(_REPO, module=module or None)
+    summary = surefire.parse_reports(root, module=module or None)
     return {
         "exit_code": proc.returncode,
         "stdout_tail": (proc.stdout or "")[-4000:],

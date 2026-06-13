@@ -23,15 +23,46 @@ Everything stack-specific lives in a **Project Profile** (`profiles/*.yaml`) and
 adapters — never in the core. A new target stack is a new profile + a new
 `BuildToolPort` adapter, not a core change.
 
-## Status — M0 (foundation)
-- [x] Hexagonal skeleton + ports (`PlannerPort`, `MemoryPort`, `MCPGatewayPort`, `BuildToolPort`)
+## Status
+**M0 — foundation**
+- [x] Hexagonal skeleton + ports (`PlannerPort`, `MemoryPort`, `MCPGatewayPort`, `BuildToolPort`, `CoderPort`)
 - [x] `AgentSession` state machine (linear saga) — TC-CORE-01/06
 - [x] Append-only execution log + pgvector (single Postgres) — TC-ARCH-03
-- [x] Project Profile loader (`profiles/msfw.yaml`)
-- [x] Arch fitness tests + import-linter contracts — TC-ARCH-01/02
-- [ ] M1: MCP Gateway + Maven & Code-Reader servers
-- [ ] M2: walking skeleton end-to-end on `sample-service`
-- [ ] M3: smart self-healing loop (reset-to-clean, no-progress breaker, reflection)
+- [x] Project Profile loader (`profiles/msfw.yaml`) + arch fitness + import-linter — TC-ARCH-01/02
+
+**M1 — tools over MCP**
+- [x] MCP Gateway client (graceful -32601 — TC-INT-05)
+- [x] Code-Reader server (tree-sitter repo map + symbol zoom-in — TC-CORE-03/04)
+- [x] Maven server (surefire parse = deterministic gate) + `MavenBuildTool`
+
+**M2 — walking skeleton**
+- [x] Provider-agnostic LLM layer (Anthropic + OpenAI-compatible) + validate-repair
+- [x] `LLMPlanner`, `LLMCoder` (whole-file edits)
+- [x] Git/Workspace server (worktree / read / write / commit)
+- [x] Control loop (plan→code→verify→heal→commit) + composition root / CLI
+- [ ] Real e2e on `sample-service` (gated: needs ANTHROPIC_API_KEY + mvn) · eval harness · PostgresMemory swap
+
+**Next**
+- [ ] M3: reset-to-clean per attempt + reflection step (no-progress breaker already in)
+- [ ] M4: ArchUnit architecture gate in the verifier
+
+## Run a real end-to-end (needs ANTHROPIC_API_KEY + mvn + git)
+
+```powershell
+$env:ANTHROPIC_API_KEY = "sk-..."
+uv run python -m aicoder "add a 'note' field to Order" --profile profiles/msfw.yaml
+# or point at a local model (Ollama):
+$env:AICODER_LLM_PROVIDER = "ollama"
+$env:AICODER_LLM_MODEL = "qwen2.5-coder:14b"
+$env:AICODER_LLM_NUM_CTX = "16384"   # raise Ollama's 4096 default so the repo map + files fit
+```
+
+### Local model via Ollama
+```powershell
+winget install Ollama.Ollama          # server runs at http://localhost:11434
+ollama pull qwen2.5-coder:14b         # ~9GB, fits a 12GB GPU at Q4
+```
+Then set the three env vars above. No API key, no cost. (`mvn` + `git` still needed for verify/commit.)
 
 ## Develop
 

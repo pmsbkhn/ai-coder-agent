@@ -29,6 +29,11 @@ class OpenAICompatibleClient:
         )
         self.model = model
         self._max_tokens = max_tokens
+        # Ollama defaults num_ctx to 4096 — too small for a repo map + file bodies,
+        # which silently truncates and makes a local model look "dumb". Allow raising
+        # it via env; passed through Ollama's OpenAI-compat layer as an option.
+        ctx = os.environ.get("AICODER_LLM_NUM_CTX")
+        self._extra_body = {"options": {"num_ctx": int(ctx)}} if ctx else None
 
     def complete_json(
         self, *, system: str, user: str, json_schema: dict, tool_name: str = "emit"
@@ -45,6 +50,7 @@ class OpenAICompatibleClient:
             ],
             response_format={"type": "json_object"},
             temperature=0,
+            extra_body=self._extra_body,
         )
         content = resp.choices[0].message.content or ""
         try:
@@ -61,5 +67,6 @@ class OpenAICompatibleClient:
             ],
             temperature=0,
             max_tokens=max_tokens,
+            extra_body=self._extra_body,
         )
         return resp.choices[0].message.content or ""

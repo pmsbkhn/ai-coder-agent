@@ -19,7 +19,8 @@ _ALLOWED: dict[SessionState, set[SessionState]] = {
     SessionState.INIT: {SessionState.PLANNING},
     SessionState.PLANNING: {SessionState.CODING, SessionState.BLOCKED},
     SessionState.CODING: {SessionState.VERIFYING},
-    SessionState.VERIFYING: {SessionState.DONE, SessionState.HEALING},
+    # VERIFYING -> CODING advances to the next sub-task (multi-task plans).
+    SessionState.VERIFYING: {SessionState.DONE, SessionState.HEALING, SessionState.CODING},
     SessionState.HEALING: {SessionState.CODING, SessionState.HEALING_FAILED},
     # terminal states
     SessionState.DONE: set(),
@@ -86,6 +87,15 @@ class AgentSession(BaseModel):
     def retry_coding(self) -> None:
         """Re-enter CODING for another healing attempt."""
         self.transition_to(SessionState.CODING)
+
+    def start_next_task(self) -> None:
+        """Advance from a passed task (VERIFYING) to coding the next one.
+
+        The circuit breaker is per-task, so the attempt budget resets here.
+        """
+        self.transition_to(SessionState.CODING)
+        self.attempts = 0
+        self.error_signatures = []
 
     @property
     def is_terminal(self) -> bool:

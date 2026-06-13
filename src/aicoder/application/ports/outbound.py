@@ -10,8 +10,10 @@ from __future__ import annotations
 from typing import Protocol, runtime_checkable
 
 from aicoder.domain.models import (
+    CodeChange,
     ExecutionTrace,
     Plan,
+    Task,
     ToolRequest,
     ToolResponse,
     VerificationResult,
@@ -23,6 +25,19 @@ from aicoder.domain.session import AgentSession
 class PlannerPort(Protocol):
     def generate_plan(self, requirement: str, repo_map: str) -> Plan:
         """Decompose a requirement into structured sub-tasks (stateless reasoning)."""
+        ...
+
+
+@runtime_checkable
+class CoderPort(Protocol):
+    def apply_task(
+        self, task: Task, files: dict[str, str], error_context: str = ""
+    ) -> CodeChange:
+        """Produce whole-file edits for one task.
+
+        `files` maps target path -> current content. `error_context` carries the
+        distilled prior failure during a self-healing retry (empty on first try).
+        """
         ...
 
 
@@ -59,5 +74,7 @@ class BuildToolPort(Protocol):
     independent of any LLM.
     """
 
-    def run_tests(self, module: str | None = None, test: str | None = None) -> VerificationResult:
+    def run_tests(
+        self, module: str | None = None, test: str | None = None, workdir: str | None = None
+    ) -> VerificationResult:
         ...
