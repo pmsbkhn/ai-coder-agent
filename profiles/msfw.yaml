@@ -1,0 +1,45 @@
+# ============================================================================
+# Project Profile: everything that is project/framework-SPECIFIC lives here,
+# never in the agent core. Extending the agent to a new stack = a new profile,
+# not a code change. (See application/profile.py for the schema.)
+# ============================================================================
+name: msfw
+language: java
+
+target:
+  # Root of the codebase the agent edits. The MSFW reactor itself.
+  repo_path: "C:/Users/phams/IdeaProjects/msfw"
+  # Module used as the safe practice target / golden reference.
+  sandbox_module: "sample-service"
+
+build:
+  # Which MCP server implements BuildToolPort, and how to read its results.
+  mcp_server: maven-server
+  test_command: "mvn test"
+  module_test_command: "mvn test -pl {module}"
+  single_test_command: "mvn test -Dtest={test}"
+  result_parser: surefire-xml            # parses target/surefire-reports/*.xml
+  reports_glob: "**/target/surefire-reports/*.xml"
+
+architecture:
+  # Deterministic architecture gate. Runs INSIDE mvn test, not in Python.
+  fitness: archunit
+  package_root: "tech.vsf.ptnt"
+  rules:
+    - "domain-core must remain pure Java (no Spring, no jakarta.persistence imports)"
+    - "hexagonal: domain must not depend on adapters"
+    - "consumers must not pull in outbox/producer machinery"
+
+knowledge:
+  # Seeded into pgvector for the Planner. Data, not code.
+  seed_docs:
+    - "CLAUDE.md"
+    - "docs/SERVICE_ARCHITECTURE.md"
+    - "docs/USAGE.md"
+    - "ops/observability/METRICS.md"
+  golden_reference: "sample-service"
+
+healing:
+  max_attempts: 3                        # Circuit Breaker N (TC-CORE-06)
+  reset_to_clean: true                   # each attempt starts from a clean worktree
+  no_progress_breaker: true              # trip early if the error signature repeats

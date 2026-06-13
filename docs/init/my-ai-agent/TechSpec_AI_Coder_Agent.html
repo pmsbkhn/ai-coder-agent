@@ -1,0 +1,245 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <meta charset="utf-8">
+    <title>TechSpec_AI_Coder_Agent</title>
+    <style>
+@page {
+    size: A4;
+    margin: 20mm 15mm;
+    background-color: #ffffff;
+    @bottom-right {
+        content: counter(page);
+        font-family: 'Helvetica Neue', Arial, sans-serif;
+        font-size: 8.5pt;
+        color: #64748b;
+    }
+    @bottom-left {
+        content: "Hệ thống AI Coder Agent — Tài liệu Thiết kế Kỹ thuật";
+        font-family: 'Helvetica Neue', Arial, sans-serif;
+        font-size: 8.5pt;
+        color: #64748b;
+    }
+}
+body {
+    margin: 0;
+    padding: 0;
+    font-family: 'Helvetica Neue', Arial, sans-serif;
+    font-size: 10pt;
+    color: #334155;
+    line-height: 1.6;
+    background-color: #ffffff;
+}
+*, *::before, *::after {
+    box-sizing: border-box;
+}
+.header-banner {
+    background-color: #1e293b;
+    color: #ffffff;
+    margin: -20mm -15mm 25px -15mm;
+    padding: 30px 15mm;
+    border-bottom: 5px solid #0284c7;
+}
+.header-banner h1 {
+    font-size: 18pt;
+    margin: 0 0 8px 0;
+    font-weight: bold;
+    letter-spacing: -0.5px;
+    line-height: 1.2;
+}
+.header-banner .meta-info {
+    font-size: 9pt;
+    color: #94a3b8;
+}
+h2 {
+    font-size: 13pt;
+    color: #0f172a;
+    border-left: 4px solid #0284c7;
+    padding-left: 10px;
+    margin-top: 30px;
+    margin-bottom: 12px;
+    font-weight: bold;
+    page-break-after: avoid;
+}
+h3 {
+    font-size: 11pt;
+    color: #0369a1;
+    margin-top: 18px;
+    margin-bottom: 8px;
+    font-weight: bold;
+    page-break-after: avoid;
+}
+p {
+    margin: 0 0 12px 0;
+    text-align: justify;
+}
+ul, ol {
+    margin: 0 0 15px 0;
+    padding-left: 20px;
+}
+li {
+    margin-bottom: 6px;
+}
+table {
+    width: 100%;
+    border-collapse: collapse;
+    margin: 15px 0;
+    page-break-inside: avoid;
+}
+th {
+    background-color: #334155;
+    color: #ffffff;
+    font-weight: bold;
+    text-align: left;
+    padding: 8px 12px;
+    font-size: 9.5pt;
+    border: 1px solid #334155;
+}
+td {
+    padding: 8px 12px;
+    border: 1px solid #e2e8f0;
+    font-size: 9pt;
+    vertical-align: top;
+}
+tr:nth-child(even) td {
+    background-color: #f8fafc;
+}
+pre {
+    background-color: #0f172a;
+    color: #f8fafc;
+    padding: 12px;
+    border-radius: 6px;
+    font-family: 'Courier New', Courier, monospace;
+    font-size: 8.5pt;
+    white-space: pre-wrap;
+    word-break: break-all;
+    margin: 12px 0;
+    line-height: 1.4;
+    border-left: 3px solid #38bdf8;
+    page-break-inside: avoid;
+}
+.block-diagram {
+    display: table;
+    width: 100%;
+    margin: 20px 0;
+    border: 1px solid #cbd5e1;
+    border-radius: 6px;
+    background-color: #f8fafc;
+    page-break-inside: avoid;
+}
+.diagram-row {
+    display: table-row;
+}
+.diagram-cell {
+    display: table-cell;
+    padding: 15px;
+    text-align: center;
+    vertical-align: middle;
+    border: 1px solid #e2e8f0;
+}
+.cell-title {
+    font-weight: bold;
+    color: #1e293b;
+    margin-bottom: 5px;
+    font-size: 9.5pt;
+}
+.cell-desc {
+    font-size: 8pt;
+    color: #64748b;
+}
+.badge-domain { background-color: #dcfce7; color: #166534; padding: 2px 6px; border-radius: 4px; font-weight: bold; font-size: 8pt; }
+.badge-app { background-color: #e0f2fe; color: #0369a1; padding: 2px 6px; border-radius: 4px; font-weight: bold; font-size: 8pt; }
+.badge-adapter { background-color: #ffedd5; color: #9a3412; padding: 2px 6px; border-radius: 4px; font-weight: bold; font-size: 8pt; }
+.math { font-family: 'Times New Roman', serif; font-style: italic; font-weight: bold; color: #0369a1; }
+</style>
+</head>
+<body>
+    <div class="header-banner">
+        <h1>THIẾT KẾ CHI TIẾT — AI CODER AGENT (HEXAGONAL MCP ORCHESTRATOR)</h1>
+        <div class="meta-info">Khung kiến trúc: Hexagonal Architecture | Core Concept: MCP Gateway & Lazy-Loading RAG | Phiên bản: v1.0</div>
+    </div>
+
+    <h2>1. Cấu trúc thành phần Module (Hexagonal Port & Adapter Layout)</h2>
+    <p>Hệ thống AI Coder Agent được thiết kế theo tư duy Clean Architecture/Hexagonal. Trái tim của hệ thống là một Orchestrator phi trạng thái, điều phối luồng giao tiếp giữa các thành phần suy luận (LLM Planner), lưu trữ bất biến (Immutable Memory) và tầng công cụ thực thi (Tools/MCP Gateway).</p>
+
+    <div class="block-diagram">
+        <div class="diagram-row" style="background-color: #f1f5f9;">
+            <div class="diagram-cell" style="width: 33%;"><strong>INPUT ADAPTERS (Cổng vào)</strong></div>
+            <div class="diagram-cell" style="width: 34%;"><strong>APPLICATION LAYER (Orchestrator)</strong></div>
+            <div class="diagram-cell" style="width: 33%;"><strong>OUTPUT ADAPTERS (Cổng ra / Tools)</strong></div>
+        </div>
+        <div class="diagram-row">
+            <div class="diagram-cell" style="text-align: left;">
+                <span class="badge-adapter">inbound</span><br/>
+                - <code>UserPromptController</code><br/>
+                - <code>VerifierFeedbackListener</code>
+            </div>
+            <div class="diagram-cell" style="text-align: left;">
+                <span class="badge-app">ports.in</span><br/>
+                - <code>RequirementPort</code><br/>
+                - <code>FeedbackPort</code><br/><br/>
+                <span class="badge-app">ports.out</span><br/>
+                - <code>PlannerPort</code> (LLM)<br/>
+                - <code>MemoryPort</code> (Storage)<br/>
+                - <code>MCPGatewayPort</code> (Tools)
+            </div>
+            <div class="diagram-cell" style="text-align: left;">
+                <span class="badge-adapter">outbound</span><br/>
+                - <code>LLMAdapter</code> (OpenAI/Anthropic)<br/>
+                - <code>MemoryAdapter</code> (Vector/Graph/Log)<br/>
+                - <code>MCPGatewayClient</code><br/>
+                  <i>+ Code Reader Server (Tree-sitter)</i><br/>
+                  <i>+ Maven/Test Server</i><br/>
+                  <i>+ Git Server</i>
+            </div>
+        </div>
+    </div>
+
+    <h2>2. Chiến lược Quản lý Dữ liệu (Immutable State & Multi-model Database)</h2>
+    <p>Hệ thống chia tách lớp lưu trữ thành 3 nhóm cơ sở dữ liệu chuyên biệt để phục vụ quá trình suy luận (Reasoning) và tự học (Self-healing):</p>
+    <ul>
+        <li><strong>Vector Database (RAG & Semantic Search):</strong> Sử dụng ChromaDB, Qdrant hoặc pgvector (tối ưu cho local Mac M4). Lưu trữ nội dung file, cấu trúc class và document. Cung cấp khả năng truy vấn ngữ nghĩa để tìm kiếm các file code liên quan mật thiết đến yêu cầu sửa đổi, cấp dữ liệu mồi cho Planner.</li>
+        <li><strong>Graph Database (Dependency & Architecture Quanta):</strong> Sử dụng Neo4j hoặc Kùzu. Lưu trữ mạng lưới chằng chịt của mã nguồn (ví dụ: Class A extends B, gọi interface C). Đảm bảo LLM có cái nhìn toàn cảnh về cấu trúc, tránh việc sửa một module làm gãy dây chuyền (ripple effect) toàn hệ thống.</li>
+        <li><strong>Time-Series / Append-Only Log (Tính Bất biến):</strong> PostgreSQL (cấu hình RLS chỉ cho phép INSERT) hoặc thư mục chứa file <code>.jsonl</code>. Lưu trữ toàn bộ execution trace, log lỗi Maven, và quyết định của Verifier qua từng loop. Đảm bảo thuộc tính **Chống Overwrite/Override**, giúp Agent học từ sai lầm (Self-healing) mà không bị mất dấu vết ngữ cảnh cũ.</li>
+    </ul>
+
+    <h2>3. Phân tích Mã nguồn bằng Interactive Lazy-Loading RAG</h2>
+    <p>Nói KHÔNG với việc nhồi toàn bộ codebase vào context window (gây Lost in the Middle) hoặc cắt nhỏ ngẫu nhiên theo chunk (gây đứt gãy syntax). Hệ thống áp dụng quy trình 2 bước của các Agentic System hàng đầu:</p>
+    <ol>
+        <li><strong>Chụp X-Quang (Skeleton / Repo Map):</strong> Sử dụng module Repo Map (dựa trên Tree-sitter và thuật toán PageRank, tương tự Aider) để sinh ra một bản đồ tóm tắt ngắn gọn. Bản đồ này chỉ chứa cây thư mục và chữ ký hàm (method signatures) mà không chứa nội dung chi tiết.</li>
+        <li><strong>Zoom-in (Retrieve theo yêu cầu):</strong> Dựa vào Repo Map, Planner tự nhận định khu vực cần can thiệp và gọi Function Calling (qua MCP Gateway) yêu cầu: "Trích xuất chi tiết nội dung Class X và Y". Các công cụ AST như Tree-sitter, Bloop hoặc GritQL đảm bảo kết quả trả về chính xác theo cấu trúc mã nguồn.</li>
+    </ol>
+
+    <h2>4. Thiết kế chi tiết Port & Giao diện Orchestrator</h2>
+    <p>Việc áp dụng kiến trúc Model Context Protocol (MCP) giúp Orchestrator tinh gọn tối đa. Nó chỉ giao tiếp với một <code>MCPGatewayPort</code> duy nhất, chuyển giao việc quản lý chi tiết các công cụ (Git, Maven, Code Reader) cho lớp MCP Server.</p>
+    
+    <pre>package tech.vsf.ai.agent.application.port.in;
+
+// 4.1 Inbound Ports: Tiếp nhận tương tác
+public interface RequirementPort {
+    void submitRequirement(String prompt);
+}
+
+public interface FeedbackPort {
+    void processVerificationResult(VerificationResult result);
+}
+
+package tech.vsf.ai.agent.application.port.out;
+
+// 4.2 Outbound Ports: Gọi dịch vụ phụ trợ
+public interface PlannerPort {
+    Plan generatePlan(String requirement, RepoMap repoMap);
+}
+
+public interface MemoryPort {
+    void appendLog(ExecutionTrace trace);
+    RepoMap getRepoMap();
+}
+
+public interface MCPGatewayPort {
+    // Port hợp nhất gọi Tool qua JSON-RPC (MCP Protocol)
+    ToolResponse executeToolCall(ToolRequest request);
+}
+</pre>
+</body>
+</html>

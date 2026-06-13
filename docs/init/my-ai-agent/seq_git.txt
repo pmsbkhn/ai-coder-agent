@@ -1,0 +1,29 @@
+sequenceDiagram
+    autonumber
+    participant Orchestrator as Orchestrator
+    participant Tools as Tools Layer (Môi trường cách ly)
+    participant Git as Git độc lập
+    participant LocalRepo as Local Repo
+    participant RemoteRepo as Remote Repo
+
+    %% Giai đoạn khởi tạo Task & Tạo nhánh
+    Orchestrator->>Tools: Bắt đầu task -> tạo branch biệt lập
+    Tools->>Git: git checkout -b feature/task-x
+    Git->>LocalRepo: Tạo nhánh nhánh chức năng mới
+
+    %% Ghi chú giai đoạn Agent làm việc nội bộ
+    note over Orchestrator, Git: Coder sửa code qua Interface, test & kiến trúc pass...
+
+    %% Giai đoạn Commit thay đổi (Quản lý bởi Tools, tránh ranh giới chồng lấn với Aider)
+    Orchestrator->>Tools: Yêu cầu Commit thay đổi chính thức
+    Tools->>Git: git add + commit rõ ràng theo chuẩn
+    Git->>LocalRepo: Lưu trữ Commit vào nhánh cục bộ
+
+    %% Khối điều kiện khi hoàn thành toàn bộ các task con
+    alt Tất cả task thuộc yêu cầu hoàn thành
+        Orchestrator->>Tools: Đóng gói -> Push + Mở Pull Request
+        Tools->>Git: git push
+        Git->>RemoteRepo: Đẩy nhánh lên máy chủ từ xa
+        Tools->>RemoteRepo: Tạo Pull Request tự động
+        RemoteRepo-->>Orchestrator: PR URL để chuẩn bị review
+    end

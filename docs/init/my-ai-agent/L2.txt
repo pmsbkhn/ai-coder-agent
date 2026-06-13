@@ -1,0 +1,80 @@
+graph TD
+    %% Định nghĩa Style chung cho sơ đồ
+    classDef default fill:#fff,stroke:#000,stroke-width:1px,color:#000;
+    classDef textLabel fill:#fca5a5,stroke:none,color:#000,font-size:12px;
+
+    %% Khối đầu vào ngoài hệ thống
+    Req[Requirements Prompt]
+
+    subgraph AICoder [AI Coder]
+        Orchestrator[Orchestrator + Control Loop]
+        Planner[LLM Planner & Analyzer]
+        Memory[(Immutable State & Memory<br>plan · history · repo map<br>Chống Overwrite/Override)]
+        Coder[Pluggable Coder<br>Interface-based / Aider]
+        Tools[Tools layer<br>Zero Trust · Sandbox<br>log · retry · permission]
+        
+        %% Phân tầng bảo mật và thực thi của Tools
+        Guard[Guard & Approval Gate]
+        OSCmds[OS Commands]
+        CICD[CICD]
+        Maven[Maven build/test]
+        Git[Git]
+        
+        Verifier[Verifier<br>Đánh giá Kết quả &<br>Kiến trúc / Fitness Functions]
+
+        %% Luồng tương tác từ bộ điều khiển trung tâm
+        Req --> Orchestrator
+    
+        Orchestrator --> Planner
+        Orchestrator --> Memory
+        Orchestrator --> Coder
+        Orchestrator --> Tools
+
+        %% Luồng từ Coder và các công cụ thực thi
+        Coder --> Tools
+        Tools --> Guard
+        Tools --> OSCmds
+        Tools --> Maven
+        Tools --> Git
+
+        %% Cổng phê duyệt (Approval Gate) chặn luồng CICD
+        Guard -->|Cần phê duyệt| CICD
+
+        %% Luồng dữ liệu thu thập về Verifier để đánh giá
+        OSCmds -->|stdout/stderr| Verifier
+        CICD -->|pipeline result| Verifier
+        Maven -->|test & fitness result| Verifier
+
+        %% Vòng lặp phản hồi (Feedback Loop) quay lại Orchestrator
+        Verifier -->|pass/fail + bằng chứng| Orchestrator
+    end
+
+    %% Hạ tầng bên ngoài hệ thống
+    RemoteRepo[Repositories remote]
+    LocalFS[Local FS / Repo]
+    DeployEnv[Deployment Env]
+
+    %% Kết nối từ công cụ ra ngoài hạ tầng thực tế
+    Git --> RemoteRepo
+    Git --> LocalFS
+    OSCmds --> LocalFS
+    Maven --> LocalFS
+    CICD --> DeployEnv
+
+    %% Style chi tiết các khối bên trong để nổi bật trên nền màu
+    style Req fill:#f4f4f5,stroke:#d4d4d8,stroke-width:1px
+    style Orchestrator fill:#fff,stroke:#000,stroke-width:1px
+    style Planner fill:#fff,stroke:#000,stroke-width:1px
+    style Memory fill:#fff,stroke:#e11d48,stroke-width:2px
+    style Coder fill:#fff,stroke:#000,stroke-width:1px
+    style Tools fill:#fff,stroke:#2563eb,stroke-width:2px
+    style Guard fill:#fff,stroke:#000,stroke-width:1px
+    style OSCmds fill:#fff,stroke:#000,stroke-width:1px
+    style CICD fill:#fff,stroke:#000,stroke-width:1px
+    style Maven fill:#fff,stroke:#000,stroke-width:1px
+    style Git fill:#fff,stroke:#000,stroke-width:1px
+    style Verifier fill:#fff,stroke:#16a34a,stroke-width:2px
+    
+    style RemoteRepo fill:#f4f4f5,stroke:#d4d4d8,stroke-width:1px
+    style LocalFS fill:#f4f4f5,stroke:#d4d4d8,stroke-width:1px
+    style DeployEnv fill:#f4f4f5,stroke:#d4d4d8,stroke-width:1px

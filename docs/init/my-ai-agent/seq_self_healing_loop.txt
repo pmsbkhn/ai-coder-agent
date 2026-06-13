@@ -1,0 +1,38 @@
+sequenceDiagram
+    autonumber
+    participant Orchestrator as Orchestrator
+    participant Memory as State/Memory (Immutable)
+    participant Coder as Pluggable Coder
+    participant Tools as Tools Layer (Sandbox)
+    participant Maven as Maven & Arch Tools
+    participant Verifier as Verifier (Dual Assessment)
+
+    note over Orchestrator: Bắt đầu xử lý 1 task cụ thể
+
+    %% Vòng lặp sửa lỗi tối đa N lần
+    loop Tối đa N lần thử (Circuit Breaker)
+        Orchestrator->>Coder: Yêu cầu sửa code (Kèm context lỗi kiến trúc/chức năng trước đó)
+        Coder-->>Orchestrator: Hoàn thiện bản Diff mới
+        Orchestrator->>Tools: Yêu cầu thẩm định (Sandbox)
+        Tools->>Maven: Chạy test chức năng + Quét quy tắc kiến trúc
+        Maven-->>Verifier: Thẩm định chéo (stdout/stderr + mã thoát + vi phạm kiến trúc)
+        
+        %% Bộ đánh giá tự phân tích kết quả log toàn diện
+        Verifier->>Verifier: Phân tích kết quả kiểm thử & sự tuân thủ thiết kế
+
+        %% Rẽ nhánh kết quả Test Pass / Fail
+        alt Đạt tất cả tiêu chí (Pass)
+            Verifier-->>Orchestrator: HOÀN TOÀN PASS (Chức năng & Kiến trúc)
+            note over Orchestrator: Thoát vòng lặp tự sửa lỗi
+        else Thất bại (Fail)
+            Verifier-->>Orchestrator: FAIL + Stack trace / Lỗi vi phạm thiết kế
+            Orchestrator->>Memory: Ghi nhận vết lỗi (Append-only để đối chiếu)
+            note over Orchestrator, Coder: Đưa log lỗi chi tiết vào prompt cho vòng kế tiếp
+        end
+    end
+
+    %% Rẽ nhánh khi vượt quá số lần thử cho phép
+    alt Vượt quá N lần vẫn fail
+        Orchestrator->>Memory: Đánh dấu task bị nghẽn (Block status)
+        note over Orchestrator: Leo thang lên Người dùng để can thiệp thủ công
+    end

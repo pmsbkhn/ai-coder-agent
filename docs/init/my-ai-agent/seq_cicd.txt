@@ -1,0 +1,36 @@
+sequenceDiagram
+    autonumber
+    actor User as User
+    participant Orchestrator as Orchestrator
+    participant Guard as Guard / Zero Trust Gate
+    participant Tools as Tools Layer
+    participant CICD as CI/CD Pipeline
+    participant Verifier as Verifier tổng thể
+    participant DeployEnv as Deployment Env
+
+    %% Giai đoạn yêu cầu triển khai và xin quyền phê duyệt
+    Orchestrator->>Guard: Gửi yêu cầu triển khai (Deploy)
+    Guard-->>User: Đệ trình phê duyệt (Kèm Dry-run & Báo cáo tuân thủ kiến trúc)
+
+    %% Khối điều kiện rẽ nhánh Lớn: Từ chối HOẶC Phê duyệt
+    alt Người dùng từ chối (Reject)
+        User-->>Guard: Từ chối / Yêu cầu chỉnh sửa thêm
+        Guard-->>Orchestrator: Hủy bỏ lệnh triển khai
+    end
+    
+    alt Người dùng phê duyệt (Approve)
+        User-->>Guard: Chấp thuận (Approve)
+        Guard->>Tools: Cấp mã token phân quyền giới hạn thời gian
+        Tools->>CICD: Kích hoạt pipeline kiểm định an toàn
+        CICD->>DeployEnv: Triển khai vào môi trường đích (Staging/Sandbox)
+        CICD-->>Verifier: Pipeline result + Kết quả Health check hệ thống
+        Verifier-->>Orchestrator: Trả về trạng thái Thành công / Thất bại
+
+        %% Khối điều kiện rẽ nhánh Nhỏ: Xử lý kết quả kiểm tra sau deploy
+        alt Gặp lỗi sau triển khai
+            Orchestrator->>Tools: Thực hiện quy trình Rollback tự động lập tức
+            Orchestrator-->>User: Báo cáo lỗi triển khai chi tiết & trạng thái phục hồi
+        else Triển khai thành công mỹ mãn
+            Orchestrator-->>User: Xác nhận hệ thống đã hoạt động ổn định
+        end
+    end

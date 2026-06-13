@@ -1,0 +1,32 @@
+sequenceDiagram
+    autonumber
+    actor User as User
+    participant Orchestrator as Orchestrator
+    participant Planner as LLM Planner
+    participant Tools as Tools Layer (Zero Trust)
+    participant LocalRepo as Local Repo
+    participant Memory as State/Memory
+
+    %% Giai đoạn quét mã nguồn sinh Repo Map
+    User->>Orchestrator: Requirement
+    Orchestrator->>Tools: Quét repo dưới quyền hạn hạn chế (Zero Trust)
+    Tools->>LocalRepo: Đọc cây thư mục + file cấu trúc chính
+    LocalRepo-->>Tools: Nội dung cấu trúc
+    Tools-->>Orchestrator: Repo map an toàn
+
+    %% Giai đoạn lập kế hoạch
+    Orchestrator->>Planner: Requirement + Repo map
+    Planner-->>Orchestrator: Kế hoạch (task list, thứ tự, ràng buộc kiến trúc)
+    
+    %% Tự kiểm tra tính hợp lệ của kế hoạch
+    Orchestrator->>Orchestrator: Validate plan (Đủ rõ? Đúng phạm vi thiết kế?)
+
+    %% Khối điều kiện làm rõ yêu cầu với Người dùng (Human-in-the-loop)
+    alt Plan chưa rõ hoặc vi phạm ràng buộc lớn
+        Orchestrator-->>User: Hỏi làm rõ / Cảnh báo rủi ro kiến trúc
+        User-->>Orchestrator: Bổ sung định hướng
+        Orchestrator->>Planner: Lập lại kế hoạch tối ưu
+    end
+
+    %% Lưu trữ ngữ cảnh nền tảng
+    Orchestrator->>Memory: Lưu plan + repo map (Ghi log bất biến)

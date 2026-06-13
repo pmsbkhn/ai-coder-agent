@@ -1,0 +1,62 @@
+; Architectural fitness contracts for the AGENT ITSELF (hexagonal enforcement).
+; These implement TC-ARCH-01 (Strict Domain Isolation) and TC-ARCH-02 (Port Enforcement)
+; at the import level. The AST-based tests in tests/test_arch_fitness.py are the
+; self-contained backstop that runs without installing import-linter.
+
+[importlinter]
+root_package = aicoder
+include_external_packages = True
+
+; ----------------------------------------------------------------------------
+; TC-ARCH-02 — Layered hexagonal dependency direction.
+; domain may not see application; application may not see adapters.
+; ----------------------------------------------------------------------------
+[importlinter:contract:layers]
+name = Hexagonal layers (domain < application < adapters)
+type = layers
+layers =
+    aicoder.adapters
+    aicoder.application
+    aicoder.domain
+
+; ----------------------------------------------------------------------------
+; TC-ARCH-01 — Strict Domain Isolation.
+; The domain must be pure: no infrastructure SDKs, no I/O libraries.
+; ----------------------------------------------------------------------------
+[importlinter:contract:domain-purity]
+name = Domain is free of infrastructure SDKs
+type = forbidden
+source_modules =
+    aicoder.domain
+forbidden_modules =
+    openai
+    anthropic
+    chromadb
+    neo4j
+    psycopg
+    mcp
+    langgraph
+    langchain
+    sqlalchemy
+    httpx
+    requests
+    yaml
+
+; ----------------------------------------------------------------------------
+; TC-ARCH-02 — The application core talks to the world only through ports.
+; The orchestrator/use-cases must not bind to concrete SDKs directly.
+; ----------------------------------------------------------------------------
+[importlinter:contract:application-purity]
+name = Application core uses ports, not concrete SDKs
+type = forbidden
+source_modules =
+    aicoder.application
+forbidden_modules =
+    openai
+    anthropic
+    chromadb
+    neo4j
+    psycopg
+    mcp
+    langgraph
+    langchain

@@ -1,0 +1,24 @@
+# M0 — single Postgres instance carrying BOTH pgvector (RAG) and the
+# append-only execution log (Immutable Memory). Replaces the original
+# 3-database design; Graph DB is deferred (use jdeps/LSP on demand).
+services:
+  postgres:
+    image: pgvector/pgvector:pg16
+    container_name: aicoder-postgres
+    environment:
+      POSTGRES_USER: aicoder
+      POSTGRES_PASSWORD: aicoder
+      POSTGRES_DB: aicoder
+    ports:
+      - "5433:5432"   # 5433 on host to avoid clashing with a local pg
+    volumes:
+      - aicoder-pgdata:/var/lib/postgresql/data
+      - ./db/migrations:/docker-entrypoint-initdb.d:ro
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U aicoder -d aicoder"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+
+volumes:
+  aicoder-pgdata:

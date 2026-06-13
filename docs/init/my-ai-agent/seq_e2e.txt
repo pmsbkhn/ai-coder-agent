@@ -1,0 +1,45 @@
+sequenceDiagram
+    autonumber
+    actor User as User
+    participant Orchestrator as Orchestrator
+    participant Planner as LLM Planner
+    participant Memory as State/Memory (Immutable)
+    participant Coder as Pluggable Coder
+    participant Tools as Tools Layer (Zero Trust/Sandbox)
+    participant Maven as Maven / Fitness Tools
+    participant Verifier as Verifier (Test & Arch)
+    participant Git as Git
+
+    %% Luồng khởi tạo ban đầu
+    User->>Orchestrator: Requirement / Prompt
+    Orchestrator->>Planner: Phân tích & phân rã
+    Planner-->>Orchestrator: Danh sách task con
+    Orchestrator->>Memory: Lưu plan + context (Append-only)
+
+    %% Vòng lặp xử lý từng task con
+    loop Mỗi task con
+        Orchestrator->>Memory: Lấy task + repo map
+        Orchestrator->>Coder: Thực thi task (Qua Pluggable Interface)
+        Coder->>Tools: Áp dụng thay đổi mã nguồn
+        Tools-->>Coder: OK (Đã cách ly trong Sandbox)
+        Coder-->>Orchestrator: Diff đã sửa
+        
+        %% Luồng kiểm thử & kiểm định kiến trúc
+        Orchestrator->>Tools: Chạy mvn test & fitness functions
+        Tools->>Maven: Thực thi build, test & quét cấu trúc
+        Maven-->>Verifier: Test result + Arch log + Evidence
+        Verifier-->>Orchestrator: pass/fail + bằng chứng kiểm định
+
+        %% Khối điều kiện rẽ nhánh (alt) dựa trên kết quả tổng hợp
+        alt Gặp lỗi (Test hoặc Kiến trúc fail)
+            Orchestrator->>Memory: Lưu vết lỗi (Bảo toàn, không ghi đè)
+            note over Orchestrator, Coder: Vào vòng sửa lỗi tự động (Sơ đồ 3)
+        else Hoàn toàn Pass
+            Orchestrator->>Git: Commit task độc lập
+        end
+
+        Orchestrator->>Memory: Đánh dấu hoàn thành task con
+    end
+
+    %% Báo cáo kết quả cuối cùng cho User
+    Orchestrator-->>User: Báo cáo kết quả tổng thể
