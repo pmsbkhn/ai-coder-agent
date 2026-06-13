@@ -64,6 +64,16 @@ ollama pull qwen2.5-coder:14b         # ~9GB, fits a 12GB GPU at Q4
 ```
 Then set the three env vars above. No API key, no cost. (`mvn` + `git` still needed for verify/commit.)
 
+### Running on another machine (e.g. macOS)
+The MSFW path is machine-specific. Instead of editing `profiles/msfw.yaml`, override it:
+```bash
+export AICODER_REPO_PATH=/Users/you/IdeaProjects/msfw   # overrides profile target.repo_path
+```
+Setup on the new machine: install `uv` + Ollama, `uv sync --extra dev --extra tools --extra adapters`,
+pull a model (a 128GB Mac fits 70B-class, e.g. `ollama pull qwen2.5:72b` or `llama3.3:70b`;
+`qwen2.5-coder` tops out at 32B). Do NOT copy `.venv/` (it is platform-specific — recreate with `uv sync`).
+The target MSFW repo must also be present, and `mvn install -DskipTests` run once there to populate `~/.m2`.
+
 ## Develop
 
 ```powershell

@@ -13,6 +13,7 @@ turns it into an end-to-end run.
 from __future__ import annotations
 
 import argparse
+import os
 import sys
 from pathlib import Path
 
@@ -28,6 +29,11 @@ from aicoder.application.profile import load_profile
 
 def build_orchestrator(profile_path: str | Path) -> Orchestrator:
     profile = load_profile(profile_path)
+    # Portability: let AICODER_REPO_PATH override the profile's target repo so the
+    # same profile works across machines (e.g. Windows C:/... vs macOS /Users/...).
+    repo_override = os.environ.get("AICODER_REPO_PATH")
+    if repo_override:
+        profile.target.repo_path = repo_override
     gateway = build_gateway_from_profile(profile)
     llm = build_llm_from_env()
     return Orchestrator(
