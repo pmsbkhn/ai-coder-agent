@@ -126,9 +126,15 @@ Run: `uv run python eval/run_eval.py [--suite lite|msfw] [--repeat N] [--timeout
 - **M5** (in progress): **PR/delivery flow DONE** — git server `push` + `open_pr` (via `gh`); orchestrator runs a
   best-effort delivery step after commit, gated by `AICODER_DELIVER=local|push|pr` (default `local` = commit only, so
   behavior is unchanged). Delivery never fails an already-committed run (no remote/auth → logs `DELIVERY_SKIPPED`).
-  Push is proven against a local bare remote in `tests/test_git_delivery.py` (no GitHub touched). **Still pending: the
-  sandbox security boundary** (mvn + model-generated code currently run on the host) **and parallel tasks** (worktrees
-  exist). NOTE: the MSFW checkout has a real GitHub remote (`pmsbkhn/msfw`) — do NOT push/PR there without explicit user opt-in.
+  Push is proven against a local bare remote in `tests/test_git_delivery.py` (no GitHub touched). NOTE: the MSFW checkout
+  has a real GitHub remote (`pmsbkhn/msfw`) — do NOT push/PR there without explicit user opt-in.
+  **Sandbox security boundary DONE** — `AICODER_SANDBOX=docker` runs the build inside a throwaway container
+  (`maven:3.9-eclipse-temurin-21`) instead of on the host: only the worktree + `~/.m2` are mounted, `--network none`
+  (so model-generated code / Maven plugins can't reach the host FS or the network), offline `mvn -o test`. The container
+  carries its own JDK, so the host needs no `JAVA_HOME`. `maven_server._mvn_command` builds the argv (unit-tested in
+  `tests/test_maven_sandbox.py`); surefire reports land on the bind-mounted worktree and parse on the host unchanged.
+  Proven: `eval/target` builds green offline in-container (incl. the ArchUnit gate), and a full agent run with
+  `AICODER_SANDBOX=docker` reached DONE with no host JAVA_HOME. **Still pending for M5: parallel tasks** (worktrees exist).
 - **M6**: CI/CD + deploy with human approval gate.
 - Also pending: optional targeted single-file heal edits to cut whole-file regeneration cost.
 
