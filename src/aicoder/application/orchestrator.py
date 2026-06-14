@@ -64,6 +64,7 @@ class Orchestrator:
             session_id=session_id,
             idempotency_key=idempotency_key,
             max_attempts=self._profile.healing.max_attempts,
+            no_progress_breaker=self._profile.healing.no_progress_breaker,
         )
         self._log(session, "SESSION_CREATED", {"prompt": prompt})
 
@@ -93,18 +94,22 @@ class Orchestrator:
         # intermediate non-compiling states (and later tasks would undo earlier
         # ones). Apply everything, then verify once and heal to green.
         all_targets = _unique([f for task in plan.tasks for f in task.target_files])
+        # Cumulative change (latest content per path). Tracked so a heal that
+        # re-emits only SOME files never loses correct edits from earlier ones
+        # when the worktree is reset to clean (M3).
+        applied: dict[str, str] = {}
         session.start_coding()  # PLANNING -> CODING
         for task in plan.tasks:
             files = self._read_files(workdir, all_targets)
             change = self._coder.apply_task(task, files)
-            self._apply_change(change, workdir)
+            self._apply_change(change, workdir, applied)
             self._log(
                 session, "DIFF_APPLIED", {"task": task.id, "files": [e.path for e in change.edits]}
             )
         self._memory.save_session(session)
 
         # ---- verify + self-heal the whole change ----
-        if not self._verify_and_heal(session, prompt, all_targets, workdir):
+        if not self._verify_and_heal(session, prompt, all_targets, workdir, applied):
             self._memory.save_session(session)
             return session
 
@@ -117,25 +122,34 @@ class Orchestrator:
     # ------------------------------------------------------------------ #
     # Per-task self-healing loop
     # ------------------------------------------------------------------ #
-    def _apply_change(self, change, workdir: str) -> None:
+    def _apply_change(self, change, workdir: str, applied: dict[str, str]) -> None:
         for edit in change.edits:
             self._tool("git", "write_file", workdir=workdir, path=edit.path, content=edit.content)
+            applied[edit.path] = edit.content  # remember for reset-to-clean restore
 
     def _verify_and_heal(
-        self, session: AgentSession, requirement: str, targets: list[str], workdir: str
+        self, session: AgentSession, requirement: str, targets: list[str], workdir: str,
+        applied: dict[str, str],
     ) -> bool:
-        """Verify the whole change; on failure, re-code with the error + the files
-        the compiler blamed, until green or the breaker trips. Returns True on pass.
-        Leaves the session in VERIFYING (pass) or HEALING_FAILED."""
+        """Verify the whole change; on failure, REFLECT then re-code, until green or
+        the breaker trips. Returns True on pass. Leaves the session in VERIFYING
+        (pass) or HEALING_FAILED.
+
+        M3: before each heal re-code we (1) reset the worktree to clean so the Coder
+        works from pristine files instead of compounding broken output, and (2) run a
+        reflection step whose output VARIES with the accumulated attempt history — so
+        a deterministic (temp 0) Coder gets a different prompt each attempt and can
+        escape the same-prompt/same-error fixpoint."""
         read_paths = list(targets)
         error_context = ""
+        strategies: list[str] = []
         first = True
         while True:
             if not first:  # re-code a fix over the whole change
                 files = self._read_files(workdir, read_paths)
                 fix_task = Task(id="heal", description=requirement, target_files=read_paths)
                 change = self._coder.apply_task(fix_task, files, error_context)
-                self._apply_change(change, workdir)
+                self._apply_change(change, workdir, applied)
                 self._log(
                     session, "DIFF_APPLIED", {"task": "heal", "files": [e.path for e in change.edits]}
                 )
@@ -152,7 +166,13 @@ class Orchestrator:
             signature = result.error_signature or _signature(result.evidence)
             self._log(
                 session, "VERIFY_FAIL",
-                {"failed_tests": result.failed_tests, "signature": signature},
+                {
+                    "failed_tests": result.failed_tests,
+                    "signature": signature,
+                    # Surface the actual build evidence — a compile failure has no
+                    # failed_tests, so without this the trace is unreadable.
+                    "evidence_head": (result.evidence or "").strip()[:400],
+                },
             )
             session.record_failure(signature)  # VERIFYING -> HEALING
             if session.should_trip_breaker():
@@ -165,8 +185,32 @@ class Orchestrator:
                     read_paths.append(path)
                     self._log(session, "CONTEXT_WIDENED", {"added": path})
 
+            distilled = _distill(result.failed_tests, result.evidence)
+            # Snapshot the CURRENT (failing) code so reflection reasons about the
+            # real source, not a guessed shape — taken BEFORE any reset-to-clean.
+            failing_files = self._read_files(workdir, read_paths)
+            # M3 reset-to-clean: purge the worktree of any abandoned/stray files,
+            # then RESTORE the cumulative change. The coder re-emits whole files
+            # for only a subset each attempt, so a bare reset would silently drop
+            # correct edits from earlier attempts (e.g. a test it stops re-emitting).
+            # Restoring `applied` keeps every correct edit; the coder overwrites
+            # what it re-emits next iteration.
+            if self._profile.healing.reset_to_clean:
+                self._tool("git", "reset_clean", workdir=workdir)
+                for path, content in applied.items():
+                    self._tool("git", "write_file", workdir=workdir, path=path, content=content)
+            # M3 reflection: a reasoning pass that varies with history -> a fresh,
+            # concrete strategy that changes the Coder's prompt each attempt.
+            strategy = (
+                self._planner.reflect(requirement, distilled, failing_files, strategies) or ""
+            ).strip()
+            if not strategy:  # never feed empty guidance — fall back to the raw error
+                strategy = "Focus precisely on the compiler/test output below and fix the exact line(s)."
+            strategies.append(strategy)
+            self._log(session, "REFLECTION", {"attempt": session.attempts, "strategy": strategy[:400]})
+
             session.retry_coding()  # HEALING -> CODING
-            error_context = _distill(result.failed_tests, result.evidence)
+            error_context = f"# Fix strategy\n{strategy}\n\n# Exact build output\n{distilled}"
 
     # ------------------------------------------------------------------ #
     # Port helpers

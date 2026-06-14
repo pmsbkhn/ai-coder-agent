@@ -69,4 +69,15 @@ class OpenAICompatibleClient:
             max_tokens=max_tokens,
             extra_body=self._extra_body,
         )
-        return resp.choices[0].message.content or ""
+        msg = resp.choices[0].message
+        content = (msg.content or "").strip()
+        if content:
+            return content
+        # Thinking models (e.g. gpt-oss) split chain-of-thought into a separate
+        # reasoning channel; if the token budget was spent thinking, `content` is
+        # empty. Fall back to the reasoning text so the caller still gets the
+        # analysis rather than an empty string.
+        reasoning = getattr(msg, "reasoning_content", None) or (msg.model_extra or {}).get(
+            "reasoning"
+        )
+        return (reasoning or "").strip()

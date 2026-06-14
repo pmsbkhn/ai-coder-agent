@@ -26,3 +26,29 @@ def test_unknown_provider_rejected(monkeypatch) -> None:
     monkeypatch.setenv("AICODER_LLM_PROVIDER", "gpt5-on-toast")
     with pytest.raises(ValueError):
         build_llm_from_env()
+
+
+def test_role_specific_model_wins(monkeypatch) -> None:
+    monkeypatch.setenv("AICODER_LLM_PROVIDER", "ollama")
+    monkeypatch.setenv("AICODER_LLM_MODEL", "shared-model")
+    monkeypatch.setenv("AICODER_PLANNER_MODEL", "gpt-oss:120b")
+    monkeypatch.setenv("AICODER_CODER_MODEL", "qwen3-coder:30b")
+    assert build_llm_from_env(role="planner").model == "gpt-oss:120b"
+    assert build_llm_from_env(role="coder").model == "qwen3-coder:30b"
+
+
+def test_role_falls_back_to_shared(monkeypatch) -> None:
+    monkeypatch.setenv("AICODER_LLM_PROVIDER", "ollama")
+    monkeypatch.setenv("AICODER_LLM_MODEL", "shared-model")
+    monkeypatch.delenv("AICODER_PLANNER_MODEL", raising=False)
+    assert build_llm_from_env(role="planner").model == "shared-model"
+
+
+def test_role_specific_provider_wins(monkeypatch) -> None:
+    # Planner on Claude, Coder on local — the roadmap's Claude-vs-local experiment.
+    monkeypatch.setenv("AICODER_LLM_PROVIDER", "ollama")
+    monkeypatch.setenv("AICODER_CODER_MODEL", "qwen3-coder:30b")
+    monkeypatch.setenv("AICODER_PLANNER_PROVIDER", "anthropic")
+    monkeypatch.setenv("ANTHROPIC_API_KEY", "test-key")
+    assert build_llm_from_env(role="planner").model.startswith("claude")
+    assert build_llm_from_env(role="coder").model == "qwen3-coder:30b"

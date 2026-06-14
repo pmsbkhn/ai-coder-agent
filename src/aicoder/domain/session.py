@@ -37,6 +37,7 @@ class AgentSession(BaseModel):
     current_task_index: int = 0
     attempts: int = 0
     max_attempts: int = 3                       # circuit breaker N (TC-CORE-06)
+    no_progress_breaker: bool = True            # early-trip on a stuck signature (M3)
     error_signatures: list[str] = Field(default_factory=list)
 
     # -- low-level guarded transition -------------------------------------
@@ -77,9 +78,14 @@ class AgentSession(BaseModel):
     def should_trip_breaker(self) -> bool:
         if self.attempts >= self.max_attempts:
             return True
-        # no-progress: the same failure signature twice in a row -> stop early.
+        if not self.no_progress_breaker:
+            return False
+        # No-progress early-trip. M3 inserts a reflection step that VARIES the
+        # Coder's input between heal attempts, so a single repeated signature is
+        # not yet "stuck" — give reflection two chances to change course and only
+        # trip after the same signature three times in a row (3 strikes).
         sigs = self.error_signatures
-        return len(sigs) >= 2 and sigs[-1] == sigs[-2]
+        return len(sigs) >= 3 and sigs[-1] == sigs[-2] == sigs[-3]
 
     def trip_breaker(self) -> None:
         self.transition_to(SessionState.HEALING_FAILED)

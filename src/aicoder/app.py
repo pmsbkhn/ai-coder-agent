@@ -35,11 +35,15 @@ def build_orchestrator(profile_path: str | Path) -> Orchestrator:
     if repo_override:
         profile.target.repo_path = repo_override
     gateway = build_gateway_from_profile(profile)
-    llm = build_llm_from_env()
+    # Planner and Coder can run on different models (e.g. a strong reasoner for
+    # design, a fast code model for the heal loop). Per-role env vars fall back to
+    # the shared AICODER_LLM_* — so an unconfigured setup behaves as a single model.
+    planner_llm = build_llm_from_env(role="planner")
+    coder_llm = build_llm_from_env(role="coder")
     return Orchestrator(
         profile=profile,
-        planner=LLMPlanner(llm, profile),
-        coder=LLMCoder(llm),
+        planner=LLMPlanner(planner_llm, profile),
+        coder=LLMCoder(coder_llm),
         memory=InMemoryMemory(),
         gateway=gateway,
         build=MavenBuildTool(gateway),

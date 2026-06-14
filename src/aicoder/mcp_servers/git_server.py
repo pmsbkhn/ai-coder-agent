@@ -67,6 +67,18 @@ def write_file(workdir: str, path: str, content: str) -> dict:
 
 
 @mcp.tool()
+def reset_clean(workdir: str) -> dict:
+    """Discard ALL uncommitted changes in the worktree, back to its base commit
+    (M3 reset-to-clean). Each heal attempt then starts from pristine files rather
+    than compounding the previous attempt's broken output."""
+    hard = _git(["reset", "--hard", "HEAD"], Path(workdir))
+    clean = _git(["clean", "-fd"], Path(workdir))
+    if hard.returncode != 0 or clean.returncode != 0:
+        return {"ok": False, "error": (hard.stderr + clean.stderr).strip()}
+    return {"ok": True}
+
+
+@mcp.tool()
 def commit(workdir: str, message: str) -> dict:
     """Stage everything in the worktree and commit. Returns the new commit sha."""
     add = _git(["add", "-A"], Path(workdir))

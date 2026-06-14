@@ -42,9 +42,17 @@ def _failed(sig: str) -> VerificationResult:
 class FakePlanner:
     def __init__(self, plan: Plan) -> None:
         self._plan = plan
+        self.reflections: list[list[str]] = []
 
     def generate_plan(self, requirement: str, repo_map: str) -> Plan:
         return self._plan
+
+    def reflect(
+        self, requirement: str, error_context: str, files: dict[str, str], history: list[str]
+    ) -> str:
+        # Vary with history so each heal attempt gets a different strategy (M3).
+        self.reflections.append(list(history))
+        return f"strategy #{len(history) + 1}"
 
 
 class FakeCoder:
@@ -69,7 +77,7 @@ class FakeGateway:
             return ToolResponse(ok=True, result={"worktree": "/tmp/wt", "branch": "b"})
         if s == "git" and m == "read_file":
             return ToolResponse(ok=True, result={"exists": True, "content": "class A {}"})
-        if s == "git" and m in ("write_file", "commit"):
+        if s == "git" and m in ("write_file", "commit", "reset_clean"):
             return ToolResponse(ok=True, result={"ok": True, "commit": "abc123"})
         return ToolResponse(ok=False, error_code=-32601, error_message=f"unknown {s}.{m}")
 
@@ -118,6 +126,30 @@ def test_self_heals_then_passes() -> None:
     assert session.attempts == 1
     # the second coding attempt received the distilled error context
     assert coder.contexts[0] == "" and "Failed tests" in coder.contexts[1]
+
+
+def test_m3_heal_reflects_and_resets_to_clean() -> None:
+    """M3: each heal attempt resets the worktree to clean and runs a reflection
+    whose strategy is fed to the Coder — so a temp-0 Coder gets a varying prompt."""
+    plan = Plan(tasks=[Task(id="t1", description="add x", target_files=["A.java"])])
+    coder, gw = FakeCoder(), FakeGateway()
+    planner = FakePlanner(plan)
+    # two distinct failures then pass -> two heal attempts
+    orch = Orchestrator(
+        profile=_PROFILE, planner=planner, coder=coder,
+        memory=InMemoryMemory(), gateway=gw,
+        build=FakeBuild([_failed("s1"), _failed("s2"), _passed()]),
+    )
+
+    session = orch.run_requirement("add field x")
+
+    assert session.state is SessionState.DONE
+    # reflection ran once per failure, each seeing the growing history (M3 variation)
+    assert planner.reflections == [[], ["strategy #1"]]
+    # worktree was reset to clean before each re-code
+    assert gw.calls.count(("git", "reset_clean")) == 2
+    # the Coder received the reflection strategy in its heal prompts
+    assert "# Fix strategy" in coder.contexts[1] and "strategy #1" in coder.contexts[1]
 
 
 def test_circuit_breaker_trips_after_n_attempts() -> None:

@@ -35,6 +35,21 @@ MSFW rules you must never break:
 Keep tasks minimal and concrete; a task a junior could verify by running mvn test.
 """
 
+_REFLECT_SYSTEM = """You are the Reflection step of an autonomous coding agent on an
+MSFW project (Java 21 / Spring Boot 4, Hexagonal, DDD). A heal attempt just failed
+its build/tests.
+
+Reason about the EXACT compiler/test output and say, concretely, what to change to
+make it pass. You are NOT writing code — you are giving the Coder a precise strategy.
+
+Be specific and actionable: name the file, the symbol, and the concrete edit (e.g.
+"the value is a generic ?, wrap it in String.valueOf(...) before assigning to String").
+Diagnose the root cause, do not just restate the error.
+
+You are also given the strategies ALREADY TRIED that still failed. Do NOT repeat
+them — propose a DIFFERENT angle each time. Answer in a few terse bullet points.
+"""
+
 
 class LLMPlanner:
     def __init__(
@@ -53,3 +68,26 @@ class LLMPlanner:
         return generate_structured(
             self._client, system=_SYSTEM, user=user, model_cls=Plan, retries=1
         )
+
+    def reflect(
+        self, requirement: str, error_context: str, files: dict[str, str], history: list[str]
+    ) -> str:
+        tried = (
+            "\n".join(f"- Attempt {i + 1}: {s}" for i, s in enumerate(history))
+            or "(none yet — this is the first reflection)"
+        )
+        files_block = "\n\n".join(
+            f"--- {path} ---\n{content[: self._cap]}" for path, content in files.items()
+        ) or "(no files provided)"
+        user = (
+            f"# Goal\n{requirement}\n\n"
+            f"# Latest failure (compiler / test output)\n{error_context}\n\n"
+            f"# CURRENT content of the failing files (reason about THIS code, do not guess its shape)\n"
+            f"{files_block}\n\n"
+            f"# Strategies already tried that STILL failed\n{tried}\n\n"
+            f"# Your task\nName the exact line(s) and the concrete edit. Give the Coder a "
+            f"different, concrete fix strategy."
+        )
+        # Generous budget: gpt-oss-class reasoners spend most tokens in the hidden
+        # thinking channel, so a small cap leaves the visible answer empty.
+        return self._client.complete_text(system=_REFLECT_SYSTEM, user=user, max_tokens=3500)

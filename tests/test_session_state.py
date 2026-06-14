@@ -62,19 +62,38 @@ def test_tc_core_06_circuit_breaker_trips_after_n_attempts() -> None:
     assert session.state is SessionState.HEALING_FAILED
 
 
-def test_no_progress_breaker_trips_early_on_repeated_signature() -> None:
-    """Same failure signature twice in a row -> stop early (before N)."""
-    session = AgentSession(session_id="s5", max_attempts=5)
+def test_no_progress_breaker_trips_on_three_strikes() -> None:
+    """M3: reflection varies the Coder's input between attempts, so a single repeat
+    is not yet 'stuck'. Trip only after the SAME signature three times in a row,
+    giving reflection two chances to change course."""
+    session = AgentSession(session_id="s5", max_attempts=9)
     session.start_planning()
     session.set_plan(_plan())
-
     session.start_coding()
-    session.start_verifying()
-    session.record_failure("same-error")
-    assert not session.should_trip_breaker()
-    session.retry_coding()
 
-    session.start_verifying()
-    session.record_failure("same-error")
-    assert session.should_trip_breaker()  # repeated signature -> no progress
-    assert session.attempts == 2  # tripped well before max_attempts=5
+    def _fail(sig: str) -> None:
+        session.start_verifying()
+        session.record_failure(sig)
+
+    _fail("same-error")
+    assert not session.should_trip_breaker()  # 1 strike
+    session.retry_coding()
+    _fail("same-error")
+    assert not session.should_trip_breaker()  # 2 strikes — reflection still has room
+    session.retry_coding()
+    _fail("same-error")
+    assert session.should_trip_breaker()       # 3 strikes -> genuinely stuck
+    assert session.attempts == 3               # tripped well before max_attempts=9
+
+
+def test_no_progress_breaker_can_be_disabled() -> None:
+    """With the flag off, only the attempt-count breaker (max_attempts) trips."""
+    session = AgentSession(session_id="s6", max_attempts=5, no_progress_breaker=False)
+    session.start_planning()
+    session.set_plan(_plan())
+    session.start_coding()
+    for _ in range(3):  # same signature repeatedly
+        session.start_verifying()
+        session.record_failure("same-error")
+        assert not session.should_trip_breaker()  # no-progress disabled
+        session.retry_coding()

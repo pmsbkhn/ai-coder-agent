@@ -27,6 +27,21 @@ class PlannerPort(Protocol):
         """Decompose a requirement into structured sub-tasks (stateless reasoning)."""
         ...
 
+    def reflect(
+        self, requirement: str, error_context: str, files: dict[str, str], history: list[str]
+    ) -> str:
+        """Analyse why the last heal attempt failed and propose a CONCRETE, fresh
+        fix strategy for the Coder (M3).
+
+        `files` is the CURRENT (failing) content of the relevant files, so the
+        reflection reasons about the real code instead of guessing its shape.
+        `history` is the strategies already tried-and-still-failed, so each call
+        produces a DIFFERENT analysis — this is what lets a deterministic (temp 0)
+        Coder escape the fixpoint where the same prompt yields the same broken
+        output forever. Returns guidance text, not code.
+        """
+        ...
+
 
 @runtime_checkable
 class CoderPort(Protocol):
