@@ -94,7 +94,7 @@ def _prepare_repo(task_dir: Path, base: Path, target: Path) -> Path:
     return proj
 
 
-def _run_task(task_dir: Path, keep: bool, target: Path, profile: Path) -> dict:
+def _run_task(task_dir: Path, keep: bool, target: Path, profile: Path, timeout: int) -> dict:
     task = yaml.safe_load((task_dir / "task.yaml").read_text(encoding="utf-8"))
     base = Path(tempfile.mkdtemp(prefix=f"aicoder-eval-{task['id']}-"))
     started = time.monotonic()
@@ -103,7 +103,7 @@ def _run_task(task_dir: Path, keep: bool, target: Path, profile: Path) -> dict:
         env = {**os.environ, "AICODER_REPO_PATH": str(proj)}
         proc = subprocess.run(
             [sys.executable, "-m", "aicoder", task["prompt"], "--profile", str(profile)],
-            cwd=str(_REPO_ROOT), env=env, capture_output=True, text=True, timeout=3000,
+            cwd=str(_REPO_ROOT), env=env, capture_output=True, text=True, timeout=timeout,
         )
         out = proc.stdout + "\n" + proc.stderr
         m = _STATE_RE.search(out)
@@ -130,6 +130,8 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("tasks", nargs="*", help="task ids to run (default: all in suite)")
     parser.add_argument("--suite", default="lite", choices=["lite", "msfw"])
     parser.add_argument("--target", help="override the suite's target source dir")
+    parser.add_argument("--timeout", type=int, default=3000,
+                        help="per-task wall-clock cap in seconds (a hung config fails fast)")
     parser.add_argument("--keep", action="store_true", help="keep temp repos for inspection")
     args = parser.parse_args(argv)
 
@@ -161,7 +163,7 @@ def main(argv: list[str] | None = None) -> int:
     results = []
     for d in all_dirs:
         print(f"▶ running {d.name} ...", flush=True)
-        r = _run_task(d, args.keep, target, profile)
+        r = _run_task(d, args.keep, target, profile, args.timeout)
         mark = "PASS" if r["passed"] else "FAIL"
         print(f"  {mark}  state={r['state']}  heals={r['heals']}  "
               f"blocked={r['blocked_writes']}  {r['seconds']}s")
