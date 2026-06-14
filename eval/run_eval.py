@@ -61,6 +61,12 @@ def _suites() -> dict:
     }
 
 
+def _median(xs: list[int]) -> int:
+    s = sorted(xs)
+    mid = len(s) // 2
+    return s[mid] if len(s) % 2 else (s[mid - 1] + s[mid]) // 2
+
+
 def _git(args: list[str], cwd: Path) -> None:
     subprocess.run(
         ["git", "-c", "gc.auto=0", "-c", "maintenance.auto=false", *args],
@@ -132,6 +138,8 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--target", help="override the suite's target source dir")
     parser.add_argument("--timeout", type=int, default=3000,
                         help="per-task wall-clock cap in seconds (a hung config fails fast)")
+    parser.add_argument("--repeat", type=int, default=1,
+                        help="run each task N times; report pass-rate + heal distribution (flakiness)")
     parser.add_argument("--keep", action="store_true", help="keep temp repos for inspection")
     args = parser.parse_args(argv)
 
@@ -160,25 +168,52 @@ def main(argv: list[str] | None = None) -> int:
     print(f"Suite={args.suite}  target={target}")
     print(f"Provider={provider}  planner={planner}  coder={coder}  tasks={len(all_dirs)}\n")
 
-    results = []
+    results = []  # one entry per task: {"id", "runs": [run, ...]}
     for d in all_dirs:
-        print(f"▶ running {d.name} ...", flush=True)
-        r = _run_task(d, args.keep, target, profile, args.timeout)
-        mark = "PASS" if r["passed"] else "FAIL"
-        print(f"  {mark}  state={r['state']}  heals={r['heals']}  "
-              f"blocked={r['blocked_writes']}  {r['seconds']}s")
-        results.append(r)
+        runs = []
+        for k in range(1, args.repeat + 1):
+            label = d.name if args.repeat == 1 else f"{d.name} (run {k}/{args.repeat})"
+            print(f"▶ running {label} ...", flush=True)
+            r = _run_task(d, args.keep, target, profile, args.timeout)
+            mark = "PASS" if r["passed"] else "FAIL"
+            print(f"  {mark}  state={r['state']}  heals={r['heals']}  "
+                  f"blocked={r['blocked_writes']}  {r['seconds']}s", flush=True)
+            runs.append(r)
+        results.append({"id": d.name, "runs": runs})
 
-    passed = sum(1 for r in results if r["passed"])
-    print("\n" + "=" * 64)
-    print(f"{'TASK':<24}{'RESULT':<8}{'STATE':<14}{'HEALS':<7}{'SECS':<7}")
-    print("-" * 64)
-    for r in results:
-        print(f"{r['id']:<24}{('PASS' if r['passed'] else 'FAIL'):<8}"
-              f"{r['state']:<14}{r['heals']:<7}{r['seconds']:<7}")
-    print("-" * 64)
-    print(f"PASS RATE ({args.suite}): {passed}/{len(results)}")
-    return 0 if passed == len(results) else 1
+    if args.repeat == 1:
+        passed = sum(1 for t in results if t["runs"][0]["passed"])
+        print("\n" + "=" * 64)
+        print(f"{'TASK':<24}{'RESULT':<8}{'STATE':<14}{'HEALS':<7}{'SECS':<7}")
+        print("-" * 64)
+        for t in results:
+            r = t["runs"][0]
+            print(f"{t['id']:<24}{('PASS' if r['passed'] else 'FAIL'):<8}"
+                  f"{r['state']:<14}{r['heals']:<7}{r['seconds']:<7}")
+        print("-" * 64)
+        print(f"PASS RATE ({args.suite}): {passed}/{len(results)}")
+        return 0 if passed == len(results) else 1
+
+    # --repeat N: reliability view — pass-rate + heal distribution, flaky flagged.
+    n = args.repeat
+    fully_reliable = 0
+    print("\n" + "=" * 72)
+    print(f"RELIABILITY (suite={args.suite}, repeat={n}) — heals shown min/median/max")
+    print("-" * 72)
+    print(f"{'TASK':<24}{'PASS_RATE':<11}{'HEALS m/med/M':<16}{'SECS~':<8}{'':<6}")
+    for t in results:
+        rs = t["runs"]
+        passes = sum(x["passed"] for x in rs)
+        heals = sorted(x["heals"] for x in rs)
+        secs_avg = sum(x["seconds"] for x in rs) / len(rs)
+        flaky = 0 < passes < len(rs)
+        fully_reliable += int(passes == len(rs))
+        hd = f"{heals[0]}/{_median(heals)}/{heals[-1]}"
+        print(f"{t['id']:<24}{f'{passes}/{len(rs)}':<11}{hd:<16}{secs_avg:<8.0f}"
+              f"{'FLAKY' if flaky else ''}")
+    print("-" * 72)
+    print(f"FULLY-RELIABLE ({args.suite}): {fully_reliable}/{len(results)} tasks passed all {n} runs")
+    return 0 if fully_reliable == len(results) else 1
 
 
 if __name__ == "__main__":
