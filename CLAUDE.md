@@ -4,6 +4,11 @@ Guidance for Claude Code (and any new session, on any machine) working in this r
 This file is the **durable handoff**: the rich design history lived in machine-local
 agent memory that does NOT travel with the code, so the essentials are captured here.
 
+> **Full architecture description** (ISO/IEC/IEEE 42010, Mermaid diagrams) lives in
+> [`docs/architecture/`](docs/architecture/README.md): context, module view, C&C view,
+> behavioral sequences, decisions+rationale, and a status/limitations/roadmap inventory.
+> This CLAUDE.md is the quick durable handoff; the AD is the detailed reference.
+
 ## What this is
 An autonomous coding agent (hexagonal + MCP orchestrator) that builds/modifies
 microservices, **MSFW-first** (the user's Java 21 / Spring Boot 4 framework, a sibling
