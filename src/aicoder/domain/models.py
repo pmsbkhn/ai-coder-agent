@@ -53,6 +53,30 @@ class Plan(BaseModel):
         return len(self.tasks) == 0
 
 
+class ProposedTest(BaseModel):
+    """An executable test the Designer proposes as part of the spec (M07 design-first).
+
+    `content` is whole test-file source; `path` is where it would live. Once a human
+    approves it (a later slice), it is written + locked via protected_globs and
+    becomes the oracle the Coder implements against."""
+
+    path: str
+    content: str
+    rationale: str = ""
+
+
+class DesignSpec(BaseModel):
+    """A *delta* design produced by the DesignPort before coding: what changes and
+    the executable test cases that encode 'done'. Prose is kept light — the binding
+    artifacts are the proposed tests (and, where relevant, architecture rules)."""
+
+    summary: str
+    affected: list[str] = Field(default_factory=list)            # components/files touched
+    interface_changes: list[str] = Field(default_factory=list)   # contract/interface deltas
+    adr_notes: str = ""                                          # short rationale
+    test_plan: list[ProposedTest] = Field(default_factory=list)
+
+
 class ToolRequest(BaseModel):
     """A unified call routed through the MCP Gateway (JSON-RPC)."""
 

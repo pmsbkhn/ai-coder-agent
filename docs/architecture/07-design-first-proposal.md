@@ -1,7 +1,8 @@
 # 07 — Proposal / ADR: Explicit Design-First Phase
 
-**Status:** Proposed (not yet implemented). **Viewpoint:** Decision. **Supersedes
-nothing; extends** AD-8/AD-9/AD-11/AD-15 (`05-decisions.md`).
+**Status:** Proposed · **Slice 1 IMPLEMENTED** (Designer role + DesignSpec/TestPlan,
+logged, no gate). **Viewpoint:** Decision. **Supersedes nothing; extends**
+AD-8/AD-9/AD-11/AD-15 (`05-decisions.md`).
 
 > This document is itself the "design output before code" that the proposal
 > advocates — written and reviewable *before* any implementation.
@@ -107,7 +108,14 @@ stateDiagram-v2
 
 ## Phased implementation plan
 
-1. **Slice 1 — Designer role + DesignSpec (no gate yet):** `DesignPort` + `LLMDesigner`; emit DesignSpec + TestPlan; log `DESIGN_PROPOSED`; write proposed tests but don't yet gate. Unit-test with a fake designer.
+1. **Slice 1 — Designer role + DesignSpec (no gate yet) — ✅ DONE.** `DesignPort` +
+   `LLMDesigner` (reasoner role, `AICODER_DESIGNER_*`); emit a schema-validated
+   `DesignSpec` + `TestPlan` and log `DESIGN_PROPOSED`. Opt-in via `design.mode` /
+   `AICODER_DESIGN` (default `off` → current fast path, unchanged). No gate / no
+   test-locking yet. Unit-tested (`tests/test_designer.py`) + proven e2e: with a
+   real reasoner (gpt-oss:120b) the agent produced a valid DesignSpec
+   (summary, affected file, a proposed `AccountWithdrawTest`) before coding, then
+   reached DONE without disruption.
 2. **Slice 2 — Approval gate + lock-as-oracle:** generalize `ApprovalPort` with `kind`; on approve, protect the proposed tests; on reject → BLOCKED. New session states + transitions (+ state tests).
 3. **Slice 3 — Tiering + config:** `design.mode` + complexity heuristic; trivial path unchanged.
 4. **Slice 4 — Adversarial test review (optional):** a second pass critiques the TestPlan before locking.

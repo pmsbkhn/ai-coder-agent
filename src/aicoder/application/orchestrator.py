@@ -24,6 +24,7 @@ from aicoder.application.ports.outbound import (
     BuildToolPort,
     CoderPort,
     DeployPort,
+    DesignPort,
     MCPGatewayPort,
     MemoryPort,
     PlannerPort,
@@ -47,6 +48,8 @@ class Orchestrator:
         deliver: str = "local",
         approval: ApprovalPort | None = None,
         deployer: DeployPort | None = None,
+        designer: DesignPort | None = None,
+        design_mode: str = "off",
     ) -> None:
         self._profile = profile
         self._planner = planner
@@ -63,6 +66,12 @@ class Orchestrator:
         # no deploy step at all.
         self._approval = approval
         self._deployer = deployer
+        # M07 design-first (Slice 1): when enabled, the Designer produces a
+        # DesignSpec + executable TestPlan that is logged (auditable) BEFORE coding.
+        # "off" (default) keeps the current fast path. Approval + locking the tests
+        # as the oracle are later slices.
+        self._designer = designer
+        self._design_mode = design_mode
 
     # ------------------------------------------------------------------ #
     # Public entry point (RequirementPort)
@@ -89,6 +98,7 @@ class Orchestrator:
         plan = self._planner.generate_plan(prompt, repo_map)
         session.set_plan(plan)
         self._log(session, "PLAN_CREATED", {"tasks": [t.id for t in plan.tasks]})
+        self._maybe_design(session, prompt, repo_map)
         self._memory.save_session(session)
 
         if plan.is_empty:
@@ -141,6 +151,20 @@ class Orchestrator:
         self._log(session, "SESSION_DONE", {})
         self._memory.save_session(session)
         return session
+
+    def _maybe_design(self, session: AgentSession, prompt: str, repo_map: str) -> None:
+        """M07 design-first, Slice 1: produce a DesignSpec + executable TestPlan and
+        LOG it (auditable) before coding. No human gate and no test-locking yet —
+        those are later slices; here the proposal is informational/observable."""
+        if self._designer is None or self._design_mode not in ("auto", "always"):
+            return
+        spec = self._designer.propose_design(prompt, repo_map)
+        self._log(session, "DESIGN_PROPOSED", {
+            "summary": spec.summary[:500],
+            "affected": spec.affected,
+            "interface_changes": spec.interface_changes,
+            "proposed_tests": [t.path for t in spec.test_plan],
+        })
 
     def _maybe_deploy(self, session: AgentSession, workdir: str, prompt: str) -> None:
         """M6 gated deploy: only for a green change, only with a configured deploy

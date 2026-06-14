@@ -11,6 +11,7 @@ from typing import Protocol, runtime_checkable
 
 from aicoder.domain.models import (
     CodeChange,
+    DesignSpec,
     ExecutionTrace,
     Plan,
     Task,
@@ -40,6 +41,16 @@ class PlannerPort(Protocol):
         Coder escape the fixpoint where the same prompt yields the same broken
         output forever. Returns guidance text, not code.
         """
+        ...
+
+
+@runtime_checkable
+class DesignPort(Protocol):
+    """Design-first phase (M07): turn a requirement + repo map into a delta
+    DesignSpec — affected components, interface changes, and executable proposed
+    tests — BEFORE coding. Runs on the reasoner role (stateless reasoning)."""
+
+    def propose_design(self, requirement: str, repo_map: str) -> DesignSpec:
         ...
 
 

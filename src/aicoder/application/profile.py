@@ -45,6 +45,13 @@ class HealingConfig(BaseModel):
     no_progress_breaker: bool = True
 
 
+class DesignConfig(BaseModel):
+    # Design-first phase (M07). "off" = current fast path (default); "always" =
+    # run the Designer for every requirement; "auto" = only for non-trivial ones
+    # (tiering heuristic lands in a later slice — treated as "always" for now).
+    mode: str = "off"
+
+
 class DeployConfig(BaseModel):
     # Shell command run to deploy a verified change (M6). None = no deploy step.
     # Target-specific (helm/kubectl/a script); runs only after green + human approval.
@@ -64,6 +71,7 @@ class ProjectProfile(BaseModel):
     architecture: ArchitectureConfig
     knowledge: KnowledgeConfig = Field(default_factory=KnowledgeConfig)
     healing: HealingConfig = Field(default_factory=HealingConfig)
+    design: DesignConfig = Field(default_factory=DesignConfig)
     deploy: DeployConfig = Field(default_factory=DeployConfig)
     # Repo-relative globs the agent may READ (they enter the Coder's context) but
     # must NOT WRITE. Used by the eval harness to make pre-written tests an
