@@ -1,0 +1,33 @@
+# ============================================================================
+# MSFW Eval Profile — drives the agent against the REAL MSFW sample-service
+# (event-sourcing + outbox idiom), copied standalone per run by eval/run_eval.py
+# (--suite msfw). The framework jars + reactor parent resolve from ~/.m2 (run
+# `mvn install -DskipTests` once in the MSFW repo first). Pre-written tests are
+# the immutable oracle (protected_globs) — the agent implements code to pass them.
+# ============================================================================
+name: eval-msfw
+language: java
+
+target:
+  # Overridden per run by the eval runner (AICODER_REPO_PATH = a standalone copy
+  # of sample-service). Placeholder only.
+  repo_path: "sample-service"
+  sandbox_module: ""              # standalone single module -> plain `mvn test`
+
+build:
+  mcp_server: maven-server
+  test_command: "mvn test"
+  result_parser: surefire-xml
+  reports_glob: "**/target/surefire-reports/*.xml"
+
+architecture:
+  fitness: none
+  package_root: "com.example.sample"
+
+healing:
+  max_attempts: 6
+  reset_to_clean: true
+  no_progress_breaker: true
+
+protected_globs:
+  - "*src/test/*"

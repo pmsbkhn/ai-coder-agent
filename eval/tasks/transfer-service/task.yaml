@@ -1,0 +1,17 @@
+id: transfer-service
+title: Implement TransferService (multi-file, application + domain)
+prompt: |
+  Implement a TransferService in the application layer
+  (com.example.eval.application.TransferService) that moves money between two
+  accounts looked up through the AccountRepository port.
+
+  Constructor: TransferService(AccountRepository repository).
+  Method: void transfer(String fromId, String toId, Money amount).
+    - Move `amount` from the `fromId` account to the `toId` account and persist both.
+    - If either account does not exist, throw IllegalArgumentException.
+    - If the source account has insufficient funds, throw IllegalStateException
+      and leave BOTH accounts' balances unchanged.
+
+  You will likely need to extend the Account aggregate so a balance can be reduced.
+  The acceptance tests in TransferServiceTest define the exact behavior. Make them
+  pass without breaking existing tests, and do NOT modify any test file.

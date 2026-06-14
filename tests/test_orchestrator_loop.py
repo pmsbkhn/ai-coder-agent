@@ -178,6 +178,45 @@ def test_multi_task_advances_between_tasks() -> None:
     assert session.state is SessionState.DONE
 
 
+def test_protected_files_are_read_but_not_written() -> None:
+    """Eval oracle: a pre-written test is fed to the Coder as context but writes
+    to it are refused, so the agent can't cheat by editing the spec."""
+    profile = _PROFILE.model_copy(update={"protected_globs": ["*src/test/*"]})
+    plan = Plan(tasks=[Task(id="t1", description="impl", target_files=["A.java"])])
+
+    class ProtectGateway(FakeGateway):
+        def execute_tool_call(self, request):
+            if request.server == "git" and request.method == "list_files":
+                return ToolResponse(ok=True, result={"files": [
+                    "src/main/java/A.java", "src/test/java/ATest.java",
+                ]})
+            return super().execute_tool_call(request)
+
+    class TestEditingCoder(FakeCoder):
+        def __init__(self) -> None:
+            super().__init__()
+            self.seen: list[str] = []
+
+        def apply_task(self, task, files, error_context: str = "") -> CodeChange:
+            self.seen = list(files)
+            return CodeChange(edits=[
+                FileEdit(path="A.java", content="class A {}"),
+                FileEdit(path="src/test/java/ATest.java", content="// agent tampering"),
+            ])
+
+    coder, gw, mem = TestEditingCoder(), ProtectGateway(), InMemoryMemory()
+    orch = Orchestrator(
+        profile=profile, planner=FakePlanner(plan), coder=coder,
+        memory=mem, gateway=gw, build=FakeBuild([_passed()]),
+    )
+    session = orch.run_requirement("impl")
+
+    assert session.state is SessionState.DONE
+    events = [t.event_type for t in mem.get_traces(session.session_id)]
+    assert "WRITE_BLOCKED" in events  # the test-file write was refused
+    assert "src/test/java/ATest.java" in coder.seen  # but it WAS in the Coder's context
+
+
 def test_empty_plan_blocks() -> None:
     session = _orchestrator(Plan(tasks=[]), FakeBuild([])).run_requirement("nothing")
     assert session.state is SessionState.BLOCKED

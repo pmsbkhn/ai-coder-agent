@@ -16,6 +16,7 @@ from __future__ import annotations
 
 import hashlib
 import re
+from fnmatch import fnmatch
 from pathlib import Path
 
 from aicoder.application.ports.outbound import (
@@ -93,7 +94,12 @@ class Orchestrator:
         # into per-file tasks, and per-task verification fails on the unavoidable
         # intermediate non-compiling states (and later tasks would undo earlier
         # ones). Apply everything, then verify once and heal to green.
-        all_targets = _unique([f for task in plan.tasks for f in task.target_files])
+        # Protected spec files (e.g. pre-written tests) are read-only context: the
+        # Coder sees them to know what "done" means, but can never overwrite them.
+        protected = self._protected_files(workdir)
+        all_targets = _unique(
+            [f for task in plan.tasks for f in task.target_files] + protected
+        )
         # Cumulative change (latest content per path). Tracked so a heal that
         # re-emits only SOME files never loses correct edits from earlier ones
         # when the worktree is reset to clean (M3).
@@ -102,7 +108,7 @@ class Orchestrator:
         for task in plan.tasks:
             files = self._read_files(workdir, all_targets)
             change = self._coder.apply_task(task, files)
-            self._apply_change(change, workdir, applied)
+            self._apply_change(change, workdir, applied, session)
             self._log(
                 session, "DIFF_APPLIED", {"task": task.id, "files": [e.path for e in change.edits]}
             )
@@ -122,8 +128,15 @@ class Orchestrator:
     # ------------------------------------------------------------------ #
     # Per-task self-healing loop
     # ------------------------------------------------------------------ #
-    def _apply_change(self, change, workdir: str, applied: dict[str, str]) -> None:
+    def _apply_change(
+        self, change, workdir: str, applied: dict[str, str], session: AgentSession
+    ) -> None:
         for edit in change.edits:
+            if self._is_protected(edit.path):
+                # The agent tried to edit a protected spec file (e.g. a test that
+                # defines the task). Refuse — the oracle must stay immutable.
+                self._log(session, "WRITE_BLOCKED", {"path": edit.path})
+                continue
             self._tool("git", "write_file", workdir=workdir, path=edit.path, content=edit.content)
             applied[edit.path] = edit.content  # remember for reset-to-clean restore
 
@@ -149,7 +162,7 @@ class Orchestrator:
                 files = self._read_files(workdir, read_paths)
                 fix_task = Task(id="heal", description=requirement, target_files=read_paths)
                 change = self._coder.apply_task(fix_task, files, error_context)
-                self._apply_change(change, workdir, applied)
+                self._apply_change(change, workdir, applied, session)
                 self._log(
                     session, "DIFF_APPLIED", {"task": "heal", "files": [e.path for e in change.edits]}
                 )
@@ -220,6 +233,17 @@ class Orchestrator:
         result = self._tool("code-reader", "get_repo_map", subpath=module)
         repo_map = result.get("repo_map", "")
         return repo_map
+
+    def _protected_files(self, workdir: str) -> list[str]:
+        """Repo-relative files matching the profile's protected globs (read-only)."""
+        if not self._profile.protected_globs:
+            return []
+        res = self._tool("git", "list_files", workdir=workdir, glob="**/*")
+        return [p for p in res.get("files", []) if self._is_protected(p)]
+
+    def _is_protected(self, rel_path: str) -> bool:
+        rel = rel_path.replace("\\", "/")
+        return any(fnmatch(rel, g) for g in self._profile.protected_globs)
 
     def _read_files(self, workdir: str, paths: list[str]) -> dict[str, str]:
         files: dict[str, str] = {}

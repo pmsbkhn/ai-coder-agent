@@ -67,6 +67,20 @@ def write_file(workdir: str, path: str, content: str) -> dict:
 
 
 @mcp.tool()
+def list_files(workdir: str, glob: str = "**/*") -> dict:
+    """List repo-relative file paths under the worktree matching a glob.
+    Used to discover protected spec files (e.g. tests) to feed the Coder as
+    read-only context."""
+    base = Path(workdir)
+    files = [
+        str(p.relative_to(base)).replace("\\", "/")
+        for p in base.glob(glob)
+        if p.is_file() and ".git/" not in str(p.relative_to(base)).replace("\\", "/")
+    ]
+    return {"files": sorted(files)}
+
+
+@mcp.tool()
 def reset_clean(workdir: str) -> dict:
     """Discard ALL uncommitted changes in the worktree, back to its base commit
     (M3 reset-to-clean). Each heal attempt then starts from pristine files rather

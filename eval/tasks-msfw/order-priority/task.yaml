@@ -1,0 +1,17 @@
+id: order-priority
+title: Thread a `priority` through the Order outbox flow (MSFW idiom, multi-file)
+prompt: |
+  Add an order `priority` (a String such as "HIGH") to the order-placing use case
+  in the MSFW sample-service, and make sure it flows all the way through to the
+  published event.
+
+  Add an overloaded OrderService.placeOrder(String customer, BigDecimal amount,
+  String priority) and thread `priority` through the Order aggregate and the
+  OrderPlaced domain event so it is serialized into the outbox payload and the
+  published CloudEvent. The EXISTING placeOrder(customer, amount) must keep
+  working (other tests rely on it) — default its priority sensibly.
+
+  The acceptance test OrderPriorityOutboxTest defines the exact behavior. Make it
+  pass without breaking the existing tests, and do NOT modify any test file.
+  Respect MSFW conventions: keep the domain pure, reuse the existing
+  @EventPublishHandler outbox flow rather than adding new machinery.

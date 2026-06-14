@@ -1,0 +1,34 @@
+# ============================================================================
+# Eval Profile — drives the agent against the small framework-free target in
+# eval/target/. Used by eval/run_eval.py: per task it copies eval/target, overlays
+# the task's pre-written tests, and points AICODER_REPO_PATH at the fresh copy.
+# Tests are an IMMUTABLE ORACLE (protected_globs) — the agent implements code to
+# pass them and may not edit them, so a green run is a real pass.
+# ============================================================================
+name: eval
+language: java
+
+target:
+  # Overridden per run by the eval runner via AICODER_REPO_PATH. Placeholder only.
+  repo_path: "eval/target"
+  sandbox_module: ""              # single-module project -> plain `mvn test`
+
+build:
+  mcp_server: maven-server
+  test_command: "mvn test"
+  result_parser: surefire-xml
+  reports_glob: "**/target/surefire-reports/*.xml"
+
+architecture:
+  fitness: none                   # no ArchUnit gate in the eval target (M4 is MSFW)
+  package_root: "com.example.eval"
+
+healing:
+  max_attempts: 6
+  reset_to_clean: true
+  no_progress_breaker: true
+
+# The agent may READ these (they enter the Coder's context as the spec) but never
+# WRITE them — pre-written tests are the immutable acceptance oracle.
+protected_globs:
+  - "*src/test/*"

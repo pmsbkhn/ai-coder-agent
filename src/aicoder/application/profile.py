@@ -53,6 +53,11 @@ class ProjectProfile(BaseModel):
     architecture: ArchitectureConfig
     knowledge: KnowledgeConfig = Field(default_factory=KnowledgeConfig)
     healing: HealingConfig = Field(default_factory=HealingConfig)
+    # Repo-relative globs the agent may READ (they enter the Coder's context) but
+    # must NOT WRITE. Used by the eval harness to make pre-written tests an
+    # immutable oracle: the agent implements code to pass them, can't edit them.
+    # Empty (default) = no restriction, so non-eval profiles behave unchanged.
+    protected_globs: list[str] = Field(default_factory=list)
 
 
 def load_profile(path: str | Path) -> ProjectProfile:

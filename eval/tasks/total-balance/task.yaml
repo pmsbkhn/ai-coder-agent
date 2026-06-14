@@ -1,0 +1,11 @@
+id: total-balance
+title: Add totalBalance query to the repository port + adapter (coordinated ripple)
+prompt: |
+  Add a `Money totalBalance()` query to the AccountRepository port
+  (com.example.eval.application.AccountRepository) that returns the sum of the
+  balances of all saved accounts, and implement it in InMemoryAccountRepository
+  (com.example.eval.adapters.InMemoryAccountRepository). An empty repository
+  returns Money.zero().
+  The acceptance tests in TotalBalanceTest define the exact behavior — note they
+  call totalBalance() through the AccountRepository port type, so the method must
+  exist on the interface. Make them pass and do NOT modify any test file.

@@ -1,0 +1,10 @@
+id: account-withdraw
+title: Add Account.withdraw (single-file domain logic)
+prompt: |
+  Add a `withdraw(Money amount)` method to the Account aggregate
+  (com.example.eval.domain.Account). It subtracts the amount from the balance.
+  If the balance is insufficient (the withdrawal would make it negative), it must
+  throw an IllegalStateException and leave the balance unchanged. A withdrawal of
+  the exact balance is allowed and leaves a zero balance.
+  The acceptance tests in AccountWithdrawTest define the exact behavior. Make them
+  pass. Do NOT modify any test file.
