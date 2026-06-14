@@ -1,0 +1,20 @@
+id: escrow-close
+title: Add a close() command to the event-sourced Escrow aggregate (MSFW event-sourcing idiom)
+prompt: |
+  Add a `close()` command to the event-sourced Escrow aggregate
+  (com.example.sample.domain.escrow.Escrow). Closing follows the same
+  event-sourcing pattern as the existing commands: it raises a new EscrowClosed
+  domain event via apply(...), and the state fold (an on(EscrowClosed) method)
+  marks the escrow as no longer open, so the closed state survives rehydration
+  from the event stream.
+
+  Rules:
+    - close() may only be called on an OPEN escrow (otherwise IllegalStateException).
+    - close() is refused if there are still held funds (held > 0) — throw
+      IllegalStateException; the escrow must be settled (all funds released) first.
+
+  Create the EscrowClosed event following the shape of the existing events in the
+  same package (e.g. EscrowOpened). The acceptance tests in EscrowCloseTest define
+  the exact behavior — make them pass without breaking existing tests, and do NOT
+  modify any test file. Keep the domain pure (no Spring / persistence in the
+  aggregate) and reuse the framework's EventSourcedAggregate apply/fold mechanism.

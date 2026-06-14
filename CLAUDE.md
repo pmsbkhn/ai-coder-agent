@@ -68,11 +68,18 @@ uv run python -m aicoder "Add a nullable String field 'note' to the Order aggreg
 # Default provider is anthropic (set ANTHROPIC_API_KEY) — Console: console.anthropic.com, separate billing from claude.ai.
 ```
 
-## Status — M0, M1, M2, M3 DONE & green; e2e PROVEN
+## Status — M0, M1, M2, M3 DONE & green; eval harness live; e2e PROVEN
 - **M0** foundation: hexagonal skeleton, ports, AgentSession, Postgres migration (append-only RLS + pgvector), profile loader, arch fitness.
 - **M1** tools over MCP: `MCPGatewayClient` (graceful JSON-RPC -32601), Code-Reader (tree-sitter repo map + symbol zoom-in), Maven (surefire parse), `MavenBuildTool`.
 - **M2** walking skeleton: provider-agnostic LLM layer, `LLMPlanner`/`LLMCoder`, Git/Workspace MCP server (worktree/read/write/commit), the control loop, composition root/CLI. **Verified end-to-end on real MSFW `sample-service` with a free local 14B**: single-file and 4-file coordinated changes both reach `mvn test` PASS + a real commit.
 - **M3** reflection-driven heal + per-role LLM split. The heal loop now VARIES its input each attempt so a deterministic (temp 0) local model escapes the same-prompt/same-error fixpoint: a `PlannerPort.reflect()` reasoning pass (runs on the reasoner model) sees the CURRENT failing file contents + accumulated strategy history and hands the Coder a concrete fix strategy; reset-to-clean restores the cumulative `applied` set (never drops correct earlier edits); the no-progress breaker is now 3-strikes + profile-gated. Per-role env (`AICODER_PLANNER_*` / `AICODER_CODER_*`, falling back to `AICODER_LLM_*`) lets the Planner run a strong reasoner and the Coder a fast code model. **Verified e2e on the 128GB M4 Max (Planner=gpt-oss:120b, Coder=qwen3-coder:30b)**: the 5-file `note` change converges at heal attempt 2 → real commit → `mvn test` 4/4 green, with the note test preserved.
+
+### Eval harness (`eval/`, `eval/run_eval.py`) — tests-as-oracle
+Objective, repeatable scoring: golden tasks ship **pre-written tests that define "done"**; the agent implements code to make them pass and is REFUSED any write to a test file (`protected_globs` in the profile → orchestrator feeds tests to the Coder as read-only context and blocks writes, logging `WRITE_BLOCKED`). A green run is therefore a genuine pass — closes the "agent dropped the test, mvn still green" false positive. Two suites:
+- **lite** — a framework-free Java/Maven/JUnit5 target in `eval/target/` (hexagonal, MSFW idiom, pure JDK → fast).
+- **msfw** — the REAL `sample-service` (outbox/event-sourcing), copied standalone per run (framework jars + reactor parent resolve from `~/.m2`); target source via `AICODER_EVAL_MSFW_TARGET`.
+
+Run: `uv run python eval/run_eval.py [--suite lite|msfw] [task-ids…]` (set the same provider/model + `JAVA_HOME` env as a normal run). Scoreboard reports PASS/FAIL, heal attempts (a difficulty signal), and blocked test-writes. Adding a task = a new `eval/tasks[-msfw]/<id>/` dir (`task.yaml` + `given/` test overlay). **Baselines (gpt-oss:120b + qwen3-coder:30b): lite 3/3, msfw 1/2.** `order-priority` passed at 0 heals with `blocked=2` (the coder twice tried to edit a test and was refused, then reached green via production code only — the oracle held on the real stack). `escrow-close` (event-sourcing: new EscrowClosed event + apply/fold + invariants) **currently FAILS** (HEALING_FAILED at the heal budget) even though a hand-written reference solution passes — a deliberate *discriminating* task and a target for future model/harness gains. A failing task in the suite is expected and wanted: it's how the suite measures headroom, not just confirms easy wins.
 
 ### Five integration/feedback bugs found by e2e and fixed (do NOT reintroduce)
 1. **Hang in `git worktree add`** inside the MCP git server — a background `git gc --auto` inherited the server's stdout
@@ -112,12 +119,13 @@ uv run python -m aicoder "Add a nullable String field 'note' to the Order aggreg
   compile (missing `tech.vsf.ptnt.msfw.domain.eventsourcing`), which the agent cannot fix by editing sample-service.
 
 ## Roadmap (next)
-- **Measure** Claude vs gpt-oss+qwen3 on the same `note` task (iteration count). [128GB Mac now in use]
+- **Grow the eval suites** (DONE: harness + lite 3/3 + msfw 1/1 — see Status): more golden tasks (event-sourcing on
+  Escrow, bugfix-style, budget-stressing), and a per-model leaderboard (swap env, re-run, compare pass-rate + heals).
 - **M4**: ArchUnit architecture gate inside `mvn test` (real dual-assessment Verifier).
 - **M5**: full git/PR flow + sandbox security boundary + parallel tasks (worktrees already in place).
 - **M6**: CI/CD + deploy with human approval gate.
-- Also pending: swap `InMemoryMemory` → PostgresMemory (Docker compose already provided); eval harness (golden tasks,
-  Claude-vs-local pass-rate); optional targeted single-file heal edits to cut whole-file regeneration cost.
+- Also pending: swap `InMemoryMemory` → PostgresMemory (Docker compose already provided); optional targeted single-file
+  heal edits to cut whole-file regeneration cost.
 
 ## Gotchas
 - Don't copy `.venv/` across machines (platform-specific); recreate with `uv sync`. `uv.lock` is committed.
