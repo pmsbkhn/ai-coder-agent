@@ -59,15 +59,20 @@ export AICODER_LLM_PROVIDER=ollama
 export AICODER_LLM_MODEL=qwen2.5-coder:14b   # or 32b / qwen2.5:72b / llama3.3:70b on a big machine
 export AICODER_LLM_NUM_CTX=16384             # Ollama defaults to 4096 — too small for repo map + files
 export AICODER_REPO_PATH=/abs/path/to/msfw   # overrides profiles/msfw.yaml target.repo_path (portable across machines)
+# Optional per-role split (M3): a strong reasoner plans, a fast code model codes.
+# Each falls back to AICODER_LLM_* if unset; provider can differ per role too.
+export AICODER_PLANNER_MODEL=gpt-oss:120b    # reasoner — also does the heal reflection
+export AICODER_CODER_MODEL=qwen3-coder:30b   # fast code model for the heal loop
 uv run python -m aicoder "Add a nullable String field 'note' to the Order aggregate..." --profile profiles/msfw.yaml
 # Needs: ollama serving a pulled model; Java 21 + Maven; `mvn install -DskipTests` once in the MSFW repo to populate ~/.m2; git.
 # Default provider is anthropic (set ANTHROPIC_API_KEY) — Console: console.anthropic.com, separate billing from claude.ai.
 ```
 
-## Status — M0, M1, M2 DONE & green; e2e PROVEN
+## Status — M0, M1, M2, M3 DONE & green; e2e PROVEN
 - **M0** foundation: hexagonal skeleton, ports, AgentSession, Postgres migration (append-only RLS + pgvector), profile loader, arch fitness.
 - **M1** tools over MCP: `MCPGatewayClient` (graceful JSON-RPC -32601), Code-Reader (tree-sitter repo map + symbol zoom-in), Maven (surefire parse), `MavenBuildTool`.
 - **M2** walking skeleton: provider-agnostic LLM layer, `LLMPlanner`/`LLMCoder`, Git/Workspace MCP server (worktree/read/write/commit), the control loop, composition root/CLI. **Verified end-to-end on real MSFW `sample-service` with a free local 14B**: single-file and 4-file coordinated changes both reach `mvn test` PASS + a real commit.
+- **M3** reflection-driven heal + per-role LLM split. The heal loop now VARIES its input each attempt so a deterministic (temp 0) local model escapes the same-prompt/same-error fixpoint: a `PlannerPort.reflect()` reasoning pass (runs on the reasoner model) sees the CURRENT failing file contents + accumulated strategy history and hands the Coder a concrete fix strategy; reset-to-clean restores the cumulative `applied` set (never drops correct earlier edits); the no-progress breaker is now 3-strikes + profile-gated. Per-role env (`AICODER_PLANNER_*` / `AICODER_CODER_*`, falling back to `AICODER_LLM_*`) lets the Planner run a strong reasoner and the Coder a fast code model. **Verified e2e on the 128GB M4 Max (Planner=gpt-oss:120b, Coder=qwen3-coder:30b)**: the 5-file `note` change converges at heal attempt 2 → real commit → `mvn test` 4/4 green, with the note test preserved.
 
 ### Five integration/feedback bugs found by e2e and fixed (do NOT reintroduce)
 1. **Hang in `git worktree add`** inside the MCP git server — a background `git gc --auto` inherited the server's stdout
@@ -90,9 +95,24 @@ uv run python -m aicoder "Add a nullable String field 'note' to the Order aggreg
   + enough retries lets a free local model do real coordinated multi-file work; the cost is iterations, not capability.**
   A stronger model (Claude / 70B) is expected to converge in fewer iterations — that's the measurable gap.
 
+### M3 findings (gpt-oss:120b planner + qwen3-coder:30b coder, on the 128GB M4 Max)
+- **Reflection is only useful if it SEES the code.** Given just the requirement + the distilled compiler error, gpt-oss
+  hallucinated a `Map<?,?>` payload that did not exist and steered the Coder wrong for 6 attempts. Once `reflect()` was
+  fed the current failing file contents it diagnosed exactly ("`outboxEvent.data().value()` returns a JSON string, not a
+  Map") and the run converged at heal attempt 2. Pass code to the reasoner, don't make it guess.
+- **Thinking models need a big token budget + a reasoning-channel fallback.** gpt-oss spends most tokens in the hidden
+  thinking channel; with a small `max_tokens` the visible `content` came back empty, so reflection was a no-op. Fix:
+  `max_tokens=3500` for reflect + `complete_text()` falls back to `reasoning_content` when `content` is empty.
+- **Never bare-reset between heal attempts.** The Coder re-emits whole files for only a SUBSET each attempt; a plain
+  `git reset --hard` dropped the correct test edits from an earlier attempt and `mvn` stayed green (note is nullable) →
+  DONE but the deliverable was silently incomplete. reset-to-clean must restore the cumulative `applied` set.
+- **Local temp-0 models are NOT perfectly deterministic** (MoE routing / GPU): identical runs varied (one trip-failed
+  before the code-aware-reflection fix). `max_attempts=6` + 3-strikes gives the needed headroom.
+- **Always `mvn install -DskipTests` at the MSFW root first** — a stale `~/.m2` made even the pristine baseline fail to
+  compile (missing `tech.vsf.ptnt.msfw.domain.eventsourcing`), which the agent cannot fix by editing sample-service.
+
 ## Roadmap (next)
-- **Measure** Claude / a 70B model on the same `note` task (iteration count vs 14B). [user is moving to a 128GB Mac for this]
-- **M3**: reset-to-clean per heal attempt + a reflection step before re-coding.
+- **Measure** Claude vs gpt-oss+qwen3 on the same `note` task (iteration count). [128GB Mac now in use]
 - **M4**: ArchUnit architecture gate inside `mvn test` (real dual-assessment Verifier).
 - **M5**: full git/PR flow + sandbox security boundary + parallel tasks (worktrees already in place).
 - **M6**: CI/CD + deploy with human approval gate.
@@ -103,8 +123,8 @@ uv run python -m aicoder "Add a nullable String field 'note' to the Order aggreg
 - Don't copy `.venv/` across machines (platform-specific); recreate with `uv sync`. `uv.lock` is committed.
 - `requires-python = ">=3.11,<3.14"` (tree-sitter wheels lagged 3.14); uv picks a compatible interpreter.
 - The MSFW checkout may carry macOS `._*` AppleDouble junk that breaks git + javac — delete all `._*` files if so.
-- Git: scaffold + M2 are on `main` (and branch `m2-walking-skeleton`), no remote (local only). 5 commits ending at the
-  AICODER_REPO_PATH portability commit.
+- Git: no remote (local only). `main` holds scaffold→M2 + the CLAUDE.md handoff; **M3 lives on branch `m3-reflection-heal`**
+  (commit "M3: reflection-driven heal loop + per-role LLM split"), not yet merged to `main`.
 ```
 domain has no infra imports • application uses ports only • execution log is append-only — all enforced in CI.
 ```
