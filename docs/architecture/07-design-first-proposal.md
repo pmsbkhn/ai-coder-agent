@@ -1,9 +1,9 @@
 # 07 — Proposal / ADR: Explicit Design-First Phase
 
-**Status:** **Slices 1–3 IMPLEMENTED** (Designer role + DesignSpec/TestPlan; human
-gate + approved tests locked as the oracle; complexity tiering); Slice 4 (adversarial
-test review) pending. **Viewpoint:** Decision. **Supersedes nothing; extends**
-AD-8/AD-9/AD-11/AD-15 (`05-decisions.md`).
+**Status:** **IMPLEMENTED — all 4 slices done** (Designer role + DesignSpec/TestPlan;
+human gate + approved tests locked as the oracle; complexity tiering; adversarial
+test review). Promote to an accepted AD. **Viewpoint:** Decision. **Supersedes
+nothing; extends** AD-8/AD-9/AD-11/AD-15 (`05-decisions.md`).
 
 > This document is itself the "design output before code" that the proposal
 > advocates — written and reviewable *before* any implementation.
@@ -134,7 +134,18 @@ stateDiagram-v2
    `always` bypasses the heuristic; `off` is the fast path. No extra LLM call — the
    decision is derived from the plan already in hand. Unit-tested (auto-skips-trivial,
    auto-designs-complex, always-overrides).
-4. **Slice 4 — Adversarial test review (optional):** a second pass critiques the TestPlan before locking.
+4. **Slice 4 — Adversarial test review — ✅ DONE.** A `ReviewPort` + `LLMReviewer`
+   (the `reviewer` role, ideally a DIFFERENT model from the Designer) critiques the
+   proposed TestPlan before locking: trivially-satisfiable? missing edge cases?
+   asserting implementation details? actually tied to the requirement? `TEST_REVIEW`
+   is logged and the concerns are surfaced into the approval request. Default
+   **advisory** (the human decides with concerns in hand); `design.review_strict`
+   makes a failed review **auto-block** (BLOCKED) before the gate. Unit-tested
+   (ok→gate, strict+weak→auto-block, advisory+weak→surface→approve). Proven e2e:
+   with the Designer on gpt-oss and the reviewer on qwen3-coder, the reviewer found
+   genuine weaknesses in a proposed AccountWithdrawTest (no balance-unchanged-after-
+   exception check, missing zero/negative-amount cases, brittle message assertion)
+   and surfaced them to the gate.
 
 **Acceptance (e2e on the eval target):** given a non-trivial requirement, the agent
 produces a DesignSpec + proposed tests → a human approves → the tests are locked →

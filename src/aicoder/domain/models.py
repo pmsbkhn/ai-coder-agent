@@ -79,6 +79,17 @@ class DesignSpec(BaseModel):
     test_plan: list[ProposedTest] = Field(default_factory=list)
 
 
+class TestReview(BaseModel):
+    """An adversarial critique of a proposed TestPlan (M07 Slice 4): do the tests
+    actually constrain the requirement, or are they weak / trivially satisfiable /
+    missing edge cases? Advisory by default (surfaced to the human gate); can
+    auto-block when design.review_strict is set."""
+
+    ok: bool                                              # tests adequately constrain the requirement
+    concerns: list[str] = Field(default_factory=list)     # weaknesses found
+    summary: str = ""
+
+
 class ToolRequest(BaseModel):
     """A unified call routed through the MCP Gateway (JSON-RPC)."""
 

@@ -20,6 +20,7 @@ from pathlib import Path
 from aicoder.adapters.coder_llm import LLMCoder
 from aicoder.adapters.deploy import CommandDeploy
 from aicoder.adapters.designer_llm import LLMDesigner
+from aicoder.adapters.reviewer_llm import LLMReviewer
 from aicoder.adapters.llm.factory import build_llm_from_env
 from aicoder.adapters.maven_build import MavenBuildTool
 from aicoder.adapters.mcp_gateway import build_gateway_from_profile
@@ -43,16 +44,18 @@ def build_orchestrator(profile_path: str | Path) -> Orchestrator:
     planner_llm = build_llm_from_env(role="planner")
     coder_llm = build_llm_from_env(role="coder")
     design_mode = os.environ.get("AICODER_DESIGN", profile.design.mode).lower()
-    designer = (
-        LLMDesigner(build_llm_from_env(role="designer"), profile)
-        if design_mode in ("auto", "always") else None
-    )
+    design_on = design_mode in ("auto", "always")
+    designer = LLMDesigner(build_llm_from_env(role="designer"), profile) if design_on else None
+    # Slice 4: adversarial reviewer (a distinct role/model). Default reasoner;
+    # set AICODER_REVIEWER_MODEL to a different model for true diversity.
+    reviewer = LLMReviewer(build_llm_from_env(role="reviewer"), profile) if design_on else None
     return Orchestrator(
         profile=profile,
         planner=LLMPlanner(planner_llm, profile),
         coder=LLMCoder(coder_llm),
         designer=designer,
         design_mode=design_mode,
+        reviewer=reviewer,
         memory=_build_memory(),
         gateway=gateway,
         build=MavenBuildTool(gateway, arch_test_pattern=_arch_pattern(profile)),

@@ -47,9 +47,12 @@ class HealingConfig(BaseModel):
 
 class DesignConfig(BaseModel):
     # Design-first phase (M07). "off" = current fast path (default); "always" =
-    # run the Designer for every requirement; "auto" = only for non-trivial ones
-    # (tiering heuristic lands in a later slice — treated as "always" for now).
+    # run the Designer for every requirement; "auto" = only for non-trivial changes
+    # (>1 task or >1 file).
     mode: str = "off"
+    # Slice 4: when true, a failed adversarial test review auto-blocks the run
+    # (before the human gate). Default false = advisory (concerns surfaced to the human).
+    review_strict: bool = False
 
 
 class DeployConfig(BaseModel):

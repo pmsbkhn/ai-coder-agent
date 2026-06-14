@@ -28,6 +28,7 @@ from aicoder.application.ports.outbound import (
     MCPGatewayPort,
     MemoryPort,
     PlannerPort,
+    ReviewPort,
 )
 from aicoder.application.profile import ProjectProfile
 from aicoder.domain.errors import ToolInvocationError
@@ -50,6 +51,7 @@ class Orchestrator:
         deployer: DeployPort | None = None,
         designer: DesignPort | None = None,
         design_mode: str = "off",
+        reviewer: ReviewPort | None = None,
     ) -> None:
         self._profile = profile
         self._planner = planner
@@ -72,6 +74,8 @@ class Orchestrator:
         # as the oracle are later slices.
         self._designer = designer
         self._design_mode = design_mode
+        # M07 Slice 4: adversarial reviewer of the proposed tests before locking.
+        self._reviewer = reviewer
 
     # ------------------------------------------------------------------ #
     # Public entry point (RequirementPort)
@@ -193,6 +197,20 @@ class Orchestrator:
         if self._approval is None:
             return set(), True  # Slice-1 behavior: produced + logged, not gated
 
+        # Slice 4: adversarial review of the proposed tests BEFORE locking. Advisory
+        # by default (concerns surfaced to the human); review_strict auto-blocks.
+        review = None
+        if self._reviewer is not None:
+            review = self._reviewer.review_tests(
+                prompt, spec.summary, [t.content for t in spec.test_plan]
+            )
+            self._log(session, "TEST_REVIEW", {"ok": review.ok, "concerns": review.concerns[:10]})
+            if not review.ok and self._profile.design.review_strict:
+                self._log(session, "DESIGN_REJECTED",
+                          {"reason": "failed adversarial test review", "concerns": review.concerns[:10]})
+                session.transition_to(SessionState.BLOCKED)  # from PLANNING
+                return set(), False
+
         # Slice 2: write the proposed tests, then gate on a human before locking them.
         session.start_designing()  # PLANNING -> DESIGNING
         locked: set[str] = set()
@@ -200,8 +218,11 @@ class Orchestrator:
             self._tool("git", "write_file", workdir=workdir, path=t.path, content=t.content)
             locked.add(t.path.replace("\\", "/"))
         session.await_approval()  # DESIGNING -> AWAITING_APPROVAL
-        self._log(session, "APPROVAL_REQUESTED", {"action": "design", "tests": sorted(locked)})
-        if self._approval.request_approval("design", f"design: {prompt[:60]}"):
+        concerns = review.concerns[:10] if review else []
+        self._log(session, "APPROVAL_REQUESTED",
+                  {"action": "design", "tests": sorted(locked), "review_concerns": concerns})
+        summary = f"design: {prompt[:60]}" + (f" — {len(concerns)} review concern(s)" if concerns else "")
+        if self._approval.request_approval("design", summary):
             self._log(session, "DESIGN_APPROVED", {"locked_tests": sorted(locked)})
             return locked, True  # session left in AWAITING_APPROVAL; start_coding advances it
         session.reject_design()  # AWAITING_APPROVAL -> BLOCKED

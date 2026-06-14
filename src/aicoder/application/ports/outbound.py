@@ -15,6 +15,7 @@ from aicoder.domain.models import (
     ExecutionTrace,
     Plan,
     Task,
+    TestReview,
     ToolRequest,
     ToolResponse,
     VerificationResult,
@@ -51,6 +52,16 @@ class DesignPort(Protocol):
     tests — BEFORE coding. Runs on the reasoner role (stateless reasoning)."""
 
     def propose_design(self, requirement: str, repo_map: str) -> DesignSpec:
+        ...
+
+
+@runtime_checkable
+class ReviewPort(Protocol):
+    """Adversarial review of a proposed TestPlan before it is locked as the oracle
+    (M07 Slice 4). Ideally a DIFFERENT model from the Designer (diversity), so the
+    designer can't rubber-stamp its own tests."""
+
+    def review_tests(self, requirement: str, design_summary: str, tests: list[str]) -> TestReview:
         ...
 
 

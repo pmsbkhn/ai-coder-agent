@@ -177,3 +177,63 @@ def test_always_designs_even_trivial() -> None:
     mem, designer = InMemoryMemory(), FakeDesigner()
     _orch_with_plan(_TRIVIAL, "always", designer, mem).run_requirement("x")
     assert designer.calls == 1   # 'always' bypasses the tiering heuristic
+
+
+# --- Slice 4: adversarial test review before locking ---------------------------
+
+# aliased so pytest doesn't try to collect the "Test"-prefixed domain model as a test
+from aicoder.domain.models import TestReview as _ReviewModel  # noqa: E402
+
+
+class _Reviewer:
+    def __init__(self, ok: bool, concerns=None) -> None:
+        self.ok = ok
+        self.concerns = concerns or []
+        self.calls = 0
+
+    def review_tests(self, requirement, design_summary, tests) -> _ReviewModel:
+        self.calls += 1
+        return _ReviewModel(ok=self.ok, concerns=self.concerns)
+
+
+def _reviewed_orch(approval, reviewer, mem, profile=_PROFILE):
+    plan = Plan(tasks=[Task(id="t1", description="x", target_files=["A.java"])])
+    return Orchestrator(
+        profile=profile, planner=FakePlanner(plan), coder=FakeCoder(),
+        memory=mem, gateway=FakeGateway(), build=FakeBuild([_passed()]),
+        designer=FakeDesigner(), design_mode="always", approval=approval, reviewer=reviewer,
+    )
+
+
+def _strict_profile():
+    return _PROFILE.model_copy(
+        update={"design": _PROFILE.design.model_copy(update={"review_strict": True})})
+
+
+def test_review_ok_proceeds_to_gate() -> None:
+    mem, rev = InMemoryMemory(), _Reviewer(True)
+    session = _reviewed_orch(_Approval(True), rev, mem).run_requirement("x")
+    assert session.state is SessionState.DONE and rev.calls == 1
+    events = [t.event_type for t in mem.get_traces(session.session_id)]
+    assert "TEST_REVIEW" in events and "DESIGN_APPROVED" in events
+
+
+def test_review_strict_auto_blocks_weak_tests() -> None:
+    mem, rev = InMemoryMemory(), _Reviewer(False, ["assertTrue(true) — trivially satisfiable"])
+    session = _reviewed_orch(_Approval(True), rev, mem, profile=_strict_profile()).run_requirement("x")
+    assert session.state is SessionState.BLOCKED
+    events = [t.event_type for t in mem.get_traces(session.session_id)]
+    assert "TEST_REVIEW" in events and "DESIGN_REJECTED" in events
+    assert "APPROVAL_REQUESTED" not in events   # blocked before the human gate
+    assert "DIFF_APPLIED" not in events
+
+
+def test_review_advisory_surfaces_concerns_then_human_approves() -> None:
+    mem, rev = InMemoryMemory(), _Reviewer(False, ["missing the insufficient-funds case"])
+    session = _reviewed_orch(_Approval(True), rev, mem).run_requirement("x")  # review_strict False
+    assert session.state is SessionState.DONE
+    events = [t.event_type for t in mem.get_traces(session.session_id)]
+    assert "TEST_REVIEW" in events and "DESIGN_APPROVED" in events
+    payload = next(t.payload for t in mem.get_traces(session.session_id)
+                   if t.event_type == "APPROVAL_REQUESTED")
+    assert payload["review_concerns"] == ["missing the insufficient-funds case"]
