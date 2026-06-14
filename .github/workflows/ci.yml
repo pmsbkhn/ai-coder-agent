@@ -1,0 +1,28 @@
+name: CI
+
+# The agent's own fitness gates run on every push/PR: the architecture contracts
+# (import-linter) and the full Python test suite. A red gate blocks merge — the
+# same dual-assessment philosophy the agent applies to the code it writes (M4),
+# applied to the agent itself.
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v5
+
+      - name: Sync (dev + tools + adapters)
+        run: uv sync --extra dev --extra tools --extra adapters
+
+      - name: Architecture contracts (import-linter)
+        run: uv run lint-imports
+
+      - name: Tests
+        run: uv run pytest -q

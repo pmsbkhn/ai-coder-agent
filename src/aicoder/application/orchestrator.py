@@ -20,8 +20,10 @@ from fnmatch import fnmatch
 from pathlib import Path
 
 from aicoder.application.ports.outbound import (
+    ApprovalPort,
     BuildToolPort,
     CoderPort,
+    DeployPort,
     MCPGatewayPort,
     MemoryPort,
     PlannerPort,
@@ -43,6 +45,8 @@ class Orchestrator:
         gateway: MCPGatewayPort,
         build: BuildToolPort,
         deliver: str = "local",
+        approval: ApprovalPort | None = None,
+        deployer: DeployPort | None = None,
     ) -> None:
         self._profile = profile
         self._planner = planner
@@ -54,6 +58,11 @@ class Orchestrator:
         # the branch to its remote, "pr" = push + open a pull request. Delivery is
         # best-effort — it never fails an already-committed (DONE) run.
         self._deliver = deliver
+        # M6: deploy gate. Deploy runs only when the profile defines a deploy
+        # command AND a human approves (approval denies by default). Both None =>
+        # no deploy step at all.
+        self._approval = approval
+        self._deployer = deployer
 
     # ------------------------------------------------------------------ #
     # Public entry point (RequirementPort)
@@ -128,9 +137,27 @@ class Orchestrator:
         self._tool("git", "commit", workdir=workdir, message=f"agent: {prompt[:60]}")
         if self._deliver in ("push", "pr"):
             self._run_delivery(session, workdir, prompt)
+        self._maybe_deploy(session, workdir, prompt)
         self._log(session, "SESSION_DONE", {})
         self._memory.save_session(session)
         return session
+
+    def _maybe_deploy(self, session: AgentSession, workdir: str, prompt: str) -> None:
+        """M6 gated deploy: only for a green change, only with a configured deploy
+        command, and only after explicit human approval. Safe by default — no
+        command or no approval => nothing is deployed."""
+        command = self._profile.deploy.command
+        if not command or self._approval is None or self._deployer is None:
+            return
+        self._log(session, "APPROVAL_REQUESTED", {"action": "deploy", "command": command})
+        if not self._approval.request_approval(f"deploy: {prompt[:60]}"):
+            self._log(session, "DEPLOY_DENIED", {})  # held at the human gate
+            return
+        result = self._deployer.deploy(workdir, command)
+        if result.get("ok"):
+            self._log(session, "DEPLOYED", {"output": (result.get("output") or "")[:400]})
+        else:
+            self._log(session, "DEPLOY_FAILED", {"error": (result.get("error") or "")[:400]})
 
     def _run_delivery(self, session: AgentSession, workdir: str, prompt: str) -> None:
         """Push the branch (and optionally open a PR) — best-effort: a delivery

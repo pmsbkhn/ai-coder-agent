@@ -81,6 +81,27 @@ class MCPGatewayPort(Protocol):
 
 
 @runtime_checkable
+class ApprovalPort(Protocol):
+    """The human gate before an irreversible / outward action (deploy, M6).
+
+    Implementations must DENY by default — the agent never deploys without an
+    explicit human (or explicitly-configured) go-ahead."""
+
+    def request_approval(self, summary: str) -> bool:
+        """Return True to proceed with deploy, False to hold."""
+        ...
+
+
+@runtime_checkable
+class DeployPort(Protocol):
+    """Run the profile's deploy command for a verified change (M6)."""
+
+    def deploy(self, workdir: str, command: str) -> dict:
+        """Execute `command` in `workdir`; return {"ok": bool, "output"/"error": str}."""
+        ...
+
+
+@runtime_checkable
 class BuildToolPort(Protocol):
     """Generic build/test abstraction — the seam for going beyond MSFW.
 

@@ -45,6 +45,12 @@ class HealingConfig(BaseModel):
     no_progress_breaker: bool = True
 
 
+class DeployConfig(BaseModel):
+    # Shell command run to deploy a verified change (M6). None = no deploy step.
+    # Target-specific (helm/kubectl/a script); runs only after green + human approval.
+    command: str | None = None
+
+
 class TargetConfig(BaseModel):
     repo_path: str
     sandbox_module: str | None = None
@@ -58,6 +64,7 @@ class ProjectProfile(BaseModel):
     architecture: ArchitectureConfig
     knowledge: KnowledgeConfig = Field(default_factory=KnowledgeConfig)
     healing: HealingConfig = Field(default_factory=HealingConfig)
+    deploy: DeployConfig = Field(default_factory=DeployConfig)
     # Repo-relative globs the agent may READ (they enter the Coder's context) but
     # must NOT WRITE. Used by the eval harness to make pre-written tests an
     # immutable oracle: the agent implements code to pass them, can't edit them.

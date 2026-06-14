@@ -18,6 +18,7 @@ import sys
 from pathlib import Path
 
 from aicoder.adapters.coder_llm import LLMCoder
+from aicoder.adapters.deploy import CommandDeploy
 from aicoder.adapters.llm.factory import build_llm_from_env
 from aicoder.adapters.maven_build import MavenBuildTool
 from aicoder.adapters.mcp_gateway import build_gateway_from_profile
@@ -48,7 +49,21 @@ def build_orchestrator(profile_path: str | Path) -> Orchestrator:
         gateway=gateway,
         build=MavenBuildTool(gateway, arch_test_pattern=_arch_pattern(profile)),
         deliver=os.environ.get("AICODER_DELIVER", "local").lower(),
+        approval=_build_approval(),
+        deployer=CommandDeploy(),
     )
+
+
+def _build_approval():
+    """Human deploy gate (M6). Default EnvApproval denies unless
+    AICODER_DEPLOY_APPROVE=1; AICODER_APPROVAL=interactive prompts on stdin."""
+    if os.environ.get("AICODER_APPROVAL", "").lower() == "interactive":
+        from aicoder.adapters.approval import InteractiveApproval
+
+        return InteractiveApproval()
+    from aicoder.adapters.approval import EnvApproval
+
+    return EnvApproval()
 
 
 def _build_memory():

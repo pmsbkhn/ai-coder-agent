@@ -68,7 +68,7 @@ uv run python -m aicoder "Add a nullable String field 'note' to the Order aggreg
 # Default provider is anthropic (set ANTHROPIC_API_KEY) — Console: console.anthropic.com, separate billing from claude.ai.
 ```
 
-## Status — M0–M5 DONE & green; eval harness live; e2e PROVEN
+## Status — M0–M6 DONE & green; eval harness live; e2e PROVEN
 - **M0** foundation: hexagonal skeleton, ports, AgentSession, Postgres migration (append-only RLS + pgvector), profile loader, arch fitness.
 - **M1** tools over MCP: `MCPGatewayClient` (graceful JSON-RPC -32601), Code-Reader (tree-sitter repo map + symbol zoom-in), Maven (surefire parse), `MavenBuildTool`.
 - **M2** walking skeleton: provider-agnostic LLM layer, `LLMPlanner`/`LLMCoder`, Git/Workspace MCP server (worktree/read/write/commit), the control loop, composition root/CLI. **Verified end-to-end on real MSFW `sample-service` with a free local 14B**: single-file and 4-file coordinated changes both reach `mvn test` PASS + a real commit.
@@ -120,10 +120,10 @@ Run: `uv run python eval/run_eval.py [--suite lite|msfw] [--repeat N] [--timeout
 - **Always `mvn install -DskipTests` at the MSFW root first** — a stale `~/.m2` made even the pristine baseline fail to
   compile (missing `tech.vsf.ptnt.msfw.domain.eventsourcing`), which the agent cannot fix by editing sample-service.
 
-## Roadmap (next)
-- **Grow the eval suites** (DONE: harness + lite 3/3 + msfw 1/1 — see Status): more golden tasks (event-sourcing on
-  Escrow, bugfix-style, budget-stressing), and a per-model leaderboard (swap env, re-run, compare pass-rate + heals).
-- **M5** (in progress): **PR/delivery flow DONE** — git server `push` + `open_pr` (via `gh`); orchestrator runs a
+## Recently completed (this cycle)
+- **Eval suites + leaderboard DONE** (see the Eval harness section): lite 3/3, msfw 1/2, per-model leaderboard +
+  `--repeat` reliability. More golden tasks (event-sourcing, bugfix, budget-stressing) remain a nice-to-have.
+- **M5**: **PR/delivery flow DONE** — git server `push` + `open_pr` (via `gh`); orchestrator runs a
   best-effort delivery step after commit, gated by `AICODER_DELIVER=local|push|pr` (default `local` = commit only, so
   behavior is unchanged). Delivery never fails an already-committed run (no remote/auth → logs `DELIVERY_SKIPPED`).
   Push is proven against a local bare remote in `tests/test_git_delivery.py` (no GitHub touched). NOTE: the MSFW checkout
@@ -141,8 +141,21 @@ Run: `uv run python eval/run_eval.py [--suite lite|msfw] [--repeat N] [--timeout
   serialize. `run_parallel()` (ThreadPoolExecutor, injectable runner) is unit-tested in `tests/test_parallel.py`. Proven:
   two requirements run concurrently against ONE repo each land in their own worktree + branch off main and commit
   independently. (Ollama still serializes inference, so the win is isolation + overlapped build/git/IO, not Nx LLM speed.)
-- **M6**: CI/CD + deploy with human approval gate.
-- Also pending: optional targeted single-file heal edits to cut whole-file regeneration cost.
+- **M6** CI/CD + human-approval-gated deploy. The agent's verify gate (functional + arch, M4) IS its CI; after a green
+  commit (+ optional delivery) the orchestrator runs a DEPLOY step that is **safe by default**: it runs only when the
+  profile defines `deploy.command` AND a human approves. `ApprovalPort` denies by default — `EnvApproval` (default)
+  proceeds only on `AICODER_DEPLOY_APPROVE=1`, `InteractiveApproval` (`AICODER_APPROVAL=interactive`) prompts on stdin;
+  `DeployPort`/`CommandDeploy` runs the profile command. Trace: `APPROVAL_REQUESTED` → `DEPLOYED` / `DEPLOY_DENIED` /
+  `DEPLOY_FAILED`. No command or no approval ⇒ nothing deploys (the DONE/commit still stands). Gate logic + real adapters
+  are unit-tested in `tests/test_deploy_gate.py`. The repo's own fitness gates run in CI via `.github/workflows/ci.yml`
+  (`uv run lint-imports` + `uv run pytest` on every push/PR).
+
+## Roadmap (next) — core milestones M0–M6 all DONE; remaining is polish
+- Optional: targeted single-file heal edits (search/replace) to cut whole-file regeneration cost.
+- Grow the eval suites (more msfw event-sourcing/bugfix tasks) and run the leaderboard with `--repeat` for a
+  trustworthy multi-model comparison.
+- Real CI/CD wiring against an actual remote/cluster (the mechanisms exist; needs infra + opt-in — never auto-push/deploy
+  to `pmsbkhn/msfw` or a real cluster without explicit user go-ahead).
 
 ### PostgresMemory (durable MemoryPort) — DONE
 `AICODER_MEMORY=postgres` swaps `InMemoryMemory` for `PostgresMemory` (default stays in-memory, no Docker needed for
