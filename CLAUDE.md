@@ -125,8 +125,17 @@ Run: `uv run python eval/run_eval.py [--suite lite|msfw] [task-ids…]` (set the
   Escrow, bugfix-style, budget-stressing), and a per-model leaderboard (swap env, re-run, compare pass-rate + heals).
 - **M5**: full git/PR flow + sandbox security boundary + parallel tasks (worktrees already in place).
 - **M6**: CI/CD + deploy with human approval gate.
-- Also pending: swap `InMemoryMemory` → PostgresMemory (Docker compose already provided); optional targeted single-file
-  heal edits to cut whole-file regeneration cost.
+- **Eval reliability**: run each task N× (temp-0 local models are flaky — the SAME task/config has both passed at 0 heals
+  and failed at the budget across runs); report pass-rate + heal distribution instead of a single shot.
+- Also pending: optional targeted single-file heal edits to cut whole-file regeneration cost.
+
+### PostgresMemory (durable MemoryPort) — DONE
+`AICODER_MEMORY=postgres` swaps `InMemoryMemory` for `PostgresMemory` (default stays in-memory, no Docker needed for
+dev/eval). `docker compose up -d` brings up pgvector/pg16 on host :5433 and applies `db/migrations/*.sql` (001 log+RAG,
+002 session). The adapter connects as the least-privilege `agent_app` role, so the append-only guarantee on
+`agent_execution_log` holds AT RUNTIME — the DB denies UPDATE/DELETE (proven in `tests/test_postgres_memory.py`, run with
+`AICODER_LIVE_PG=1`). Session state is a separate mutable `agent_session` table (upsert). **Verified e2e**: a real agent
+run with `AICODER_MEMORY=postgres` persisted the full saga (every trace event in the log + session state) to Postgres.
 
 ## Gotchas
 - Don't copy `.venv/` across machines (platform-specific); recreate with `uv sync`. `uv.lock` is committed.

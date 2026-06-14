@@ -44,10 +44,23 @@ def build_orchestrator(profile_path: str | Path) -> Orchestrator:
         profile=profile,
         planner=LLMPlanner(planner_llm, profile),
         coder=LLMCoder(coder_llm),
-        memory=InMemoryMemory(),
+        memory=_build_memory(),
         gateway=gateway,
         build=MavenBuildTool(gateway, arch_test_pattern=_arch_pattern(profile)),
     )
+
+
+def _build_memory():
+    """Durable Postgres memory when AICODER_MEMORY=postgres, else in-memory.
+
+    Postgres gives an append-only execution log (RLS-enforced) + resumable session
+    state; the default keeps the dev/eval loop runnable with no Docker.
+    """
+    if os.environ.get("AICODER_MEMORY", "inmemory").lower() == "postgres":
+        from aicoder.adapters.memory_postgres import PostgresMemory
+
+        return PostgresMemory()
+    return InMemoryMemory()
 
 
 def _arch_pattern(profile) -> str | None:

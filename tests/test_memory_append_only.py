@@ -3,8 +3,10 @@
 Two guards:
   1. The migration must grant the app role only SELECT+INSERT on the log and must
      NOT expose an UPDATE/DELETE policy for it.
-  2. No adapter source may issue UPDATE/DELETE against agent_execution_log.
-The live RLS "permission denied" assertion is an integration test added in M5.
+  2. No adapter source may issue an UPDATE/DELETE SQL statement against
+     agent_execution_log.
+The live RLS "permission denied" assertion lives in tests/test_postgres_memory.py
+(runs against a real Postgres under AICODER_LIVE_PG=1).
 """
 
 from __future__ import annotations
@@ -26,7 +28,14 @@ def test_migration_grants_log_insert_only() -> None:
 
 
 def test_no_adapter_mutates_the_log() -> None:
-    pattern = re.compile(r"(update|delete)\s+.*agent_execution_log", re.IGNORECASE | re.DOTALL)
+    # Match an actual mutating SQL statement on the log — `UPDATE agent_execution_log`
+    # or `DELETE FROM ... agent_execution_log` — not the words "update"/"delete" in
+    # prose/comments (which is a false positive, e.g. a docstring describing the
+    # append-only guarantee).
+    pattern = re.compile(
+        r"update\s+agent_execution_log\b|delete\s+from\s+[^\n;]*agent_execution_log\b",
+        re.IGNORECASE,
+    )
     for f in ADAPTERS.rglob("*.py"):
         text = f.read_text(encoding="utf-8")
         assert not pattern.search(text), (
