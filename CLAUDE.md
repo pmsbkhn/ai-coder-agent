@@ -68,7 +68,7 @@ uv run python -m aicoder "Add a nullable String field 'note' to the Order aggreg
 # Default provider is anthropic (set ANTHROPIC_API_KEY) — Console: console.anthropic.com, separate billing from claude.ai.
 ```
 
-## Status — M0–M4 DONE & green; eval harness live; e2e PROVEN
+## Status — M0–M5 DONE & green; eval harness live; e2e PROVEN
 - **M0** foundation: hexagonal skeleton, ports, AgentSession, Postgres migration (append-only RLS + pgvector), profile loader, arch fitness.
 - **M1** tools over MCP: `MCPGatewayClient` (graceful JSON-RPC -32601), Code-Reader (tree-sitter repo map + symbol zoom-in), Maven (surefire parse), `MavenBuildTool`.
 - **M2** walking skeleton: provider-agnostic LLM layer, `LLMPlanner`/`LLMCoder`, Git/Workspace MCP server (worktree/read/write/commit), the control loop, composition root/CLI. **Verified end-to-end on real MSFW `sample-service` with a free local 14B**: single-file and 4-file coordinated changes both reach `mvn test` PASS + a real commit.
@@ -134,7 +134,13 @@ Run: `uv run python eval/run_eval.py [--suite lite|msfw] [--repeat N] [--timeout
   carries its own JDK, so the host needs no `JAVA_HOME`. `maven_server._mvn_command` builds the argv (unit-tested in
   `tests/test_maven_sandbox.py`); surefire reports land on the bind-mounted worktree and parse on the host unchanged.
   Proven: `eval/target` builds green offline in-container (incl. the ArchUnit gate), and a full agent run with
-  `AICODER_SANDBOX=docker` reached DONE with no host JAVA_HOME. **Still pending for M5: parallel tasks** (worktrees exist).
+  `AICODER_SANDBOX=docker` reached DONE with no host JAVA_HOME.
+  **Parallel tasks DONE** — `python -m aicoder.parallel "req one" "req two" … --profile P` runs each requirement as a
+  separate `python -m aicoder` PROCESS (own orchestrator, own MCP servers, own session_id → own `feature/<sid>` worktree),
+  so isolation is by OS process + per-session worktree — no shared mutable state, no shared MCP stdio connection to
+  serialize. `run_parallel()` (ThreadPoolExecutor, injectable runner) is unit-tested in `tests/test_parallel.py`. Proven:
+  two requirements run concurrently against ONE repo each land in their own worktree + branch off main and commit
+  independently. (Ollama still serializes inference, so the win is isolation + overlapped build/git/IO, not Nx LLM speed.)
 - **M6**: CI/CD + deploy with human approval gate.
 - Also pending: optional targeted single-file heal edits to cut whole-file regeneration cost.
 
