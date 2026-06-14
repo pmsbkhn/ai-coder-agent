@@ -98,8 +98,9 @@ class ApprovalPort(Protocol):
     Implementations must DENY by default — the agent never deploys without an
     explicit human (or explicitly-configured) go-ahead."""
 
-    def request_approval(self, summary: str) -> bool:
-        """Return True to proceed with deploy, False to hold."""
+    def request_approval(self, kind: str, summary: str) -> bool:
+        """Gate an action of the given `kind` ("design" | "deploy"). Return True to
+        proceed, False to hold. Implementations deny by default."""
         ...
 
 

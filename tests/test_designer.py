@@ -89,3 +89,54 @@ def test_design_skipped_by_default() -> None:
     assert session.state is SessionState.DONE
     assert designer.calls == 0
     assert "DESIGN_PROPOSED" not in [t.event_type for t in mem.get_traces(session.session_id)]
+
+
+# --- Slice 2: human gate + lock the approved tests as the oracle ----------------
+
+class _Approval:
+    def __init__(self, ok: bool) -> None:
+        self.ok = ok
+
+    def request_approval(self, kind: str, summary: str) -> bool:
+        return self.ok
+
+
+class _TamperingCoder(FakeCoder):
+    """Tries to overwrite the design-locked test — must be refused."""
+    def apply_task(self, task, files, error_context: str = ""):
+        from aicoder.domain.models import CodeChange, FileEdit
+        return CodeChange(edits=[
+            FileEdit(path="A.java", content="class A {}"),
+            FileEdit(path="src/test/java/com/example/OrderNoteTest.java", content="// tamper"),
+        ])
+
+
+def _gated_orch(approval, mem, coder=None):
+    plan = Plan(tasks=[Task(id="t1", description="x", target_files=["A.java"])])
+    return Orchestrator(
+        profile=_PROFILE, planner=FakePlanner(plan), coder=coder or FakeCoder(),
+        memory=mem, gateway=FakeGateway(), build=FakeBuild([_passed()]),
+        designer=FakeDesigner(), design_mode="always", approval=approval,
+    )
+
+
+def test_approved_design_locks_proposed_tests() -> None:
+    mem = InMemoryMemory()
+    session = _gated_orch(_Approval(True), mem, coder=_TamperingCoder()).run_requirement("x")
+    assert session.state is SessionState.DONE
+    events = [t.event_type for t in mem.get_traces(session.session_id)]
+    assert events.count("DESIGN_PROPOSED") == 1
+    assert "APPROVAL_REQUESTED" in events and "DESIGN_APPROVED" in events
+    # the Coder tried to overwrite the locked test and was refused
+    assert "WRITE_BLOCKED" in events
+
+
+def test_rejected_design_blocks_before_coding() -> None:
+    mem = InMemoryMemory()
+    coder = FakeCoder()
+    session = _gated_orch(_Approval(False), mem, coder=coder).run_requirement("x")
+    assert session.state is SessionState.BLOCKED
+    events = [t.event_type for t in mem.get_traces(session.session_id)]
+    assert "DESIGN_REJECTED" in events
+    assert "DIFF_APPLIED" not in events     # never reached coding
+    assert coder.contexts == []             # Coder never called

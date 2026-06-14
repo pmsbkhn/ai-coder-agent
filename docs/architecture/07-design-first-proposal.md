@@ -1,8 +1,9 @@
 # 07 — Proposal / ADR: Explicit Design-First Phase
 
-**Status:** Proposed · **Slice 1 IMPLEMENTED** (Designer role + DesignSpec/TestPlan,
-logged, no gate). **Viewpoint:** Decision. **Supersedes nothing; extends**
-AD-8/AD-9/AD-11/AD-15 (`05-decisions.md`).
+**Status:** **Slices 1–2 IMPLEMENTED** (Designer role + DesignSpec/TestPlan;
+human gate + approved tests locked as the oracle); Slices 3–4 pending.
+**Viewpoint:** Decision. **Supersedes nothing; extends** AD-8/AD-9/AD-11/AD-15
+(`05-decisions.md`).
 
 > This document is itself the "design output before code" that the proposal
 > advocates — written and reviewable *before* any implementation.
@@ -116,7 +117,16 @@ stateDiagram-v2
    real reasoner (gpt-oss:120b) the agent produced a valid DesignSpec
    (summary, affected file, a proposed `AccountWithdrawTest`) before coding, then
    reached DONE without disruption.
-2. **Slice 2 — Approval gate + lock-as-oracle:** generalize `ApprovalPort` with `kind`; on approve, protect the proposed tests; on reject → BLOCKED. New session states + transitions (+ state tests).
+2. **Slice 2 — Approval gate + lock-as-oracle — ✅ DONE.** `ApprovalPort` generalized
+   with `kind` (`design`/`deploy`, kind-specific `AICODER_{KIND}_APPROVE`). New
+   session states `DESIGNING` / `AWAITING_APPROVAL` (+ transitions). The Designer
+   writes its proposed tests into the worktree; a human gates them; **on approve they
+   are LOCKED** (added to the protected set → the Coder reads them as the oracle but
+   cannot overwrite them) and the run proceeds to CODING; **on reject → BLOCKED**
+   before any coding. Unit-tested (gate approve→`WRITE_BLOCKED` on tamper, reject→
+   BLOCKED, kind-specific approval). Proven e2e: gpt-oss proposed an
+   `AccountWithdrawTest`, it was approved + locked, and the Coder implemented
+   `withdraw` to pass its own approved test → green at 0 heals.
 3. **Slice 3 — Tiering + config:** `design.mode` + complexity heuristic; trivial path unchanged.
 4. **Slice 4 — Adversarial test review (optional):** a second pass critiques the TestPlan before locking.
 

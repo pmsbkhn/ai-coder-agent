@@ -98,7 +98,6 @@ class Orchestrator:
         plan = self._planner.generate_plan(prompt, repo_map)
         session.set_plan(plan)
         self._log(session, "PLAN_CREATED", {"tasks": [t.id for t in plan.tasks]})
-        self._maybe_design(session, prompt, repo_map)
         self._memory.save_session(session)
 
         if plan.is_empty:
@@ -112,6 +111,13 @@ class Orchestrator:
         ws = self._tool("git", "start_task", branch=branch)
         workdir = ws.get("worktree") or self._profile.target.repo_path
 
+        # ---- design-first (M07): produce a design + test plan; if a human gate is
+        # wired, lock the approved tests as the oracle the Coder must satisfy. ----
+        locked, proceed = self._run_design(session, prompt, repo_map, workdir)
+        if not proceed:
+            self._memory.save_session(session)
+            return session
+
         # ---- coding phase: apply every task, each seeing the CURRENT state of
         # ALL plan files (so a later task coordinates with earlier edits). We do
         # NOT verify between tasks: a weak model over-decomposes a cohesive change
@@ -120,7 +126,7 @@ class Orchestrator:
         # ones). Apply everything, then verify once and heal to green.
         # Protected spec files (e.g. pre-written tests) are read-only context: the
         # Coder sees them to know what "done" means, but can never overwrite them.
-        protected = self._protected_files(workdir)
+        protected = self._protected_files(workdir, locked)
         all_targets = _unique(
             [f for task in plan.tasks for f in task.target_files] + protected
         )
@@ -128,18 +134,18 @@ class Orchestrator:
         # re-emits only SOME files never loses correct edits from earlier ones
         # when the worktree is reset to clean (M3).
         applied: dict[str, str] = {}
-        session.start_coding()  # PLANNING -> CODING
+        session.start_coding()  # PLANNING/AWAITING_APPROVAL -> CODING
         for task in plan.tasks:
             files = self._read_files(workdir, all_targets)
             change = self._coder.apply_task(task, files)
-            self._apply_change(change, workdir, applied, session)
+            self._apply_change(change, workdir, applied, session, locked)
             self._log(
                 session, "DIFF_APPLIED", {"task": task.id, "files": [e.path for e in change.edits]}
             )
         self._memory.save_session(session)
 
         # ---- verify + self-heal the whole change ----
-        if not self._verify_and_heal(session, prompt, all_targets, workdir, applied):
+        if not self._verify_and_heal(session, prompt, all_targets, workdir, applied, locked):
             self._memory.save_session(session)
             return session
 
@@ -152,12 +158,19 @@ class Orchestrator:
         self._memory.save_session(session)
         return session
 
-    def _maybe_design(self, session: AgentSession, prompt: str, repo_map: str) -> None:
-        """M07 design-first, Slice 1: produce a DesignSpec + executable TestPlan and
-        LOG it (auditable) before coding. No human gate and no test-locking yet —
-        those are later slices; here the proposal is informational/observable."""
+    def _run_design(
+        self, session: AgentSession, prompt: str, repo_map: str, workdir: str
+    ) -> tuple[set[str], bool]:
+        """M07 design-first. Returns (locked_test_paths, proceed).
+
+        - design off / no designer → ([], True): current fast path.
+        - designer but NO approval port → produce + log only (Slice 1), ([], True).
+        - designer + approval (Slice 2) → write the proposed tests, gate on a human;
+          on approve, LOCK them as the oracle ([paths], True); on reject → BLOCKED ([], False).
+        """
         if self._designer is None or self._design_mode not in ("auto", "always"):
-            return
+            return set(), True
+
         spec = self._designer.propose_design(prompt, repo_map)
         self._log(session, "DESIGN_PROPOSED", {
             "summary": spec.summary[:500],
@@ -165,6 +178,23 @@ class Orchestrator:
             "interface_changes": spec.interface_changes,
             "proposed_tests": [t.path for t in spec.test_plan],
         })
+        if self._approval is None:
+            return set(), True  # Slice-1 behavior: produced + logged, not gated
+
+        # Slice 2: write the proposed tests, then gate on a human before locking them.
+        session.start_designing()  # PLANNING -> DESIGNING
+        locked: set[str] = set()
+        for t in spec.test_plan:
+            self._tool("git", "write_file", workdir=workdir, path=t.path, content=t.content)
+            locked.add(t.path.replace("\\", "/"))
+        session.await_approval()  # DESIGNING -> AWAITING_APPROVAL
+        self._log(session, "APPROVAL_REQUESTED", {"action": "design", "tests": sorted(locked)})
+        if self._approval.request_approval("design", f"design: {prompt[:60]}"):
+            self._log(session, "DESIGN_APPROVED", {"locked_tests": sorted(locked)})
+            return locked, True  # session left in AWAITING_APPROVAL; start_coding advances it
+        session.reject_design()  # AWAITING_APPROVAL -> BLOCKED
+        self._log(session, "DESIGN_REJECTED", {})
+        return set(), False
 
     def _maybe_deploy(self, session: AgentSession, workdir: str, prompt: str) -> None:
         """M6 gated deploy: only for a green change, only with a configured deploy
@@ -174,7 +204,7 @@ class Orchestrator:
         if not command or self._approval is None or self._deployer is None:
             return
         self._log(session, "APPROVAL_REQUESTED", {"action": "deploy", "command": command})
-        if not self._approval.request_approval(f"deploy: {prompt[:60]}"):
+        if not self._approval.request_approval("deploy", f"deploy: {prompt[:60]}"):
             self._log(session, "DEPLOY_DENIED", {})  # held at the human gate
             return
         result = self._deployer.deploy(workdir, command)
@@ -211,10 +241,11 @@ class Orchestrator:
     # Per-task self-healing loop
     # ------------------------------------------------------------------ #
     def _apply_change(
-        self, change, workdir: str, applied: dict[str, str], session: AgentSession
+        self, change, workdir: str, applied: dict[str, str], session: AgentSession,
+        locked: set[str],
     ) -> None:
         for edit in change.edits:
-            if self._is_protected(edit.path):
+            if self._is_protected(edit.path, locked):
                 # The agent tried to edit a protected spec file (e.g. a test that
                 # defines the task). Refuse — the oracle must stay immutable.
                 self._log(session, "WRITE_BLOCKED", {"path": edit.path})
@@ -224,7 +255,7 @@ class Orchestrator:
 
     def _verify_and_heal(
         self, session: AgentSession, requirement: str, targets: list[str], workdir: str,
-        applied: dict[str, str],
+        applied: dict[str, str], locked: set[str],
     ) -> bool:
         """Verify the whole change; on failure, REFLECT then re-code, until green or
         the breaker trips. Returns True on pass. Leaves the session in VERIFYING
@@ -244,7 +275,7 @@ class Orchestrator:
                 files = self._read_files(workdir, read_paths)
                 fix_task = Task(id="heal", description=requirement, target_files=read_paths)
                 change = self._coder.apply_task(fix_task, files, error_context)
-                self._apply_change(change, workdir, applied, session)
+                self._apply_change(change, workdir, applied, session, locked)
                 self._log(
                     session, "DIFF_APPLIED", {"task": "heal", "files": [e.path for e in change.edits]}
                 )
@@ -319,16 +350,18 @@ class Orchestrator:
         repo_map = result.get("repo_map", "")
         return repo_map
 
-    def _protected_files(self, workdir: str) -> list[str]:
-        """Repo-relative files matching the profile's protected globs (read-only)."""
-        if not self._profile.protected_globs:
-            return []
+    def _protected_files(self, workdir: str, locked: set[str]) -> list[str]:
+        """Repo-relative files the Coder may READ but not WRITE: profile protected
+        globs (e.g. pre-written tests) + design-locked approved tests (M07)."""
+        if not self._profile.protected_globs and not locked:
+            return list(locked)
         res = self._tool("git", "list_files", workdir=workdir, glob="**/*")
-        return [p for p in res.get("files", []) if self._is_protected(p)]
+        found = [p for p in res.get("files", []) if self._is_protected(p, locked)]
+        return _unique(found + sorted(locked))
 
-    def _is_protected(self, rel_path: str) -> bool:
+    def _is_protected(self, rel_path: str, locked: set[str]) -> bool:
         rel = rel_path.replace("\\", "/")
-        return any(fnmatch(rel, g) for g in self._profile.protected_globs)
+        return rel in locked or any(fnmatch(rel, g) for g in self._profile.protected_globs)
 
     def _read_files(self, workdir: str, paths: list[str]) -> dict[str, str]:
         files: dict[str, str] = {}

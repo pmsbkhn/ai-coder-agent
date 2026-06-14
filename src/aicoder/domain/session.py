@@ -17,7 +17,10 @@ from aicoder.domain.models import Plan, SessionState
 # Legal state transitions. Anything not listed here is rejected.
 _ALLOWED: dict[SessionState, set[SessionState]] = {
     SessionState.INIT: {SessionState.PLANNING},
-    SessionState.PLANNING: {SessionState.CODING, SessionState.BLOCKED},
+    # PLANNING -> DESIGNING (design-first) | CODING (fast path) | BLOCKED (empty plan)
+    SessionState.PLANNING: {SessionState.CODING, SessionState.BLOCKED, SessionState.DESIGNING},
+    SessionState.DESIGNING: {SessionState.AWAITING_APPROVAL, SessionState.BLOCKED},
+    SessionState.AWAITING_APPROVAL: {SessionState.CODING, SessionState.BLOCKED},
     SessionState.CODING: {SessionState.VERIFYING},
     # VERIFYING -> CODING advances to the next sub-task (multi-task plans).
     SessionState.VERIFYING: {SessionState.DONE, SessionState.HEALING, SessionState.CODING},
@@ -49,6 +52,19 @@ class AgentSession(BaseModel):
     # -- intent-revealing transitions -------------------------------------
     def start_planning(self) -> None:
         self.transition_to(SessionState.PLANNING)
+
+    # -- design-first (M07) --------------------------------------------------
+    def start_designing(self) -> None:
+        """Enter the design phase (produce DesignSpec + test plan)."""
+        self.transition_to(SessionState.DESIGNING)
+
+    def await_approval(self) -> None:
+        """Design produced; block on the human gate."""
+        self.transition_to(SessionState.AWAITING_APPROVAL)
+
+    def reject_design(self) -> None:
+        """Human rejected the design at the gate → escalate (terminal)."""
+        self.transition_to(SessionState.BLOCKED)
 
     def set_plan(self, plan: Plan) -> None:
         if self.state is not SessionState.PLANNING:

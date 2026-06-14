@@ -84,6 +84,10 @@ class FakeGateway:
                                                  "branch": "b", "pushed": True})
         if s == "git" and m == "open_pr":
             return ToolResponse(ok=True, result={"ok": True, "url": "https://example/pr/1"})
+        if s == "git" and m == "list_files":
+            return ToolResponse(ok=True, result={"files": [
+                "src/main/java/A.java", "src/test/java/com/example/OrderNoteTest.java",
+            ]})
         return ToolResponse(ok=False, error_code=-32601, error_message=f"unknown {s}.{m}")
 
 

@@ -26,7 +26,7 @@ class _Approval:
         self.ok = ok
         self.asked = False
 
-    def request_approval(self, summary: str) -> bool:
+    def request_approval(self, kind: str, summary: str) -> bool:
         self.asked = True
         return self.ok
 
@@ -84,10 +84,12 @@ def test_env_approval_denies_by_default_and_real_deploy_runs(tmp_path, monkeypat
     """Real adapters: EnvApproval holds unless AICODER_DEPLOY_APPROVE=1, and
     CommandDeploy actually runs the shell command in the workdir."""
     monkeypatch.delenv("AICODER_DEPLOY_APPROVE", raising=False)
-    assert EnvApproval().request_approval("x") is False
-    assert AutoDenyApproval().request_approval("x") is False
+    assert EnvApproval().request_approval("deploy", "x") is False
+    assert AutoDenyApproval().request_approval("deploy", "x") is False
     monkeypatch.setenv("AICODER_DEPLOY_APPROVE", "1")
-    assert EnvApproval().request_approval("x") is True
+    assert EnvApproval().request_approval("deploy", "x") is True
+    # kind-specific: the deploy switch does NOT approve a design request
+    assert EnvApproval().request_approval("design", "x") is False
 
     res = CommandDeploy().deploy(str(tmp_path), "echo deployed > marker.txt")
     assert res["ok"] is True

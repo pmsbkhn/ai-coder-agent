@@ -17,6 +17,8 @@ class SessionState(str, Enum):
 
     INIT = "INIT"
     PLANNING = "PLANNING"
+    DESIGNING = "DESIGNING"              # M07 design-first: producing the design + test plan
+    AWAITING_APPROVAL = "AWAITING_APPROVAL"  # human gate on the design + proposed tests
     CODING = "CODING"
     VERIFYING = "VERIFYING"
     HEALING = "HEALING"
