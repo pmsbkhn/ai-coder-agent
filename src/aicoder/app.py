@@ -46,8 +46,14 @@ def build_orchestrator(profile_path: str | Path) -> Orchestrator:
         coder=LLMCoder(coder_llm),
         memory=InMemoryMemory(),
         gateway=gateway,
-        build=MavenBuildTool(gateway),
+        build=MavenBuildTool(gateway, arch_test_pattern=_arch_pattern(profile)),
     )
+
+
+def _arch_pattern(profile) -> str | None:
+    """The architecture-test glob, only when the profile opts into an ArchUnit gate."""
+    arch = profile.architecture
+    return arch.test_pattern if arch.fitness == "archunit" else None
 
 
 def main(argv: list[str] | None = None) -> int:

@@ -24,9 +24,14 @@ class BuildConfig(BaseModel):
 
 
 class ArchitectureConfig(BaseModel):
-    fitness: str                              # e.g. "archunit"
+    fitness: str                              # e.g. "archunit" | "none"
     package_root: str = ""
     rules: list[str] = Field(default_factory=list)
+    # When fitness == "archunit": a glob matched against failing test ids
+    # ("{FQCN}.{method}") to tell ARCHITECTURE-rule failures apart from functional
+    # ones, so the Verifier can report a dual verdict. Default catches ArchUnit
+    # rule classes named *Architecture*Test.
+    test_pattern: str = "*Architecture*"
 
 
 class KnowledgeConfig(BaseModel):

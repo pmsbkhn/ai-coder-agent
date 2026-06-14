@@ -182,6 +182,9 @@ class Orchestrator:
                 {
                     "failed_tests": result.failed_tests,
                     "signature": signature,
+                    # Dual verdict (M4): which gate failed — functional, architecture, or both.
+                    "functional_passed": result.functional_passed,
+                    "arch_passed": result.arch_passed,
                     # Surface the actual build evidence — a compile failure has no
                     # failed_tests, so without this the trace is unreadable.
                     "evidence_head": (result.evidence or "").strip()[:400],

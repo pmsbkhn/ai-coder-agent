@@ -20,8 +20,9 @@ build:
   reports_glob: "**/target/surefire-reports/*.xml"
 
 architecture:
-  fitness: none                   # no ArchUnit gate in the eval target (M4 is MSFW)
+  fitness: archunit               # M4 dual gate: ArchUnit rules run inside `mvn test`
   package_root: "com.example.eval"
+  test_pattern: "*Architecture*"  # failing *Architecture*Test ids count on the arch axis
 
 healing:
   max_attempts: 6

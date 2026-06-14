@@ -68,11 +68,13 @@ uv run python -m aicoder "Add a nullable String field 'note' to the Order aggreg
 # Default provider is anthropic (set ANTHROPIC_API_KEY) — Console: console.anthropic.com, separate billing from claude.ai.
 ```
 
-## Status — M0, M1, M2, M3 DONE & green; eval harness live; e2e PROVEN
+## Status — M0–M4 DONE & green; eval harness live; e2e PROVEN
 - **M0** foundation: hexagonal skeleton, ports, AgentSession, Postgres migration (append-only RLS + pgvector), profile loader, arch fitness.
 - **M1** tools over MCP: `MCPGatewayClient` (graceful JSON-RPC -32601), Code-Reader (tree-sitter repo map + symbol zoom-in), Maven (surefire parse), `MavenBuildTool`.
 - **M2** walking skeleton: provider-agnostic LLM layer, `LLMPlanner`/`LLMCoder`, Git/Workspace MCP server (worktree/read/write/commit), the control loop, composition root/CLI. **Verified end-to-end on real MSFW `sample-service` with a free local 14B**: single-file and 4-file coordinated changes both reach `mvn test` PASS + a real commit.
 - **M3** reflection-driven heal + per-role LLM split. The heal loop now VARIES its input each attempt so a deterministic (temp 0) local model escapes the same-prompt/same-error fixpoint: a `PlannerPort.reflect()` reasoning pass (runs on the reasoner model) sees the CURRENT failing file contents + accumulated strategy history and hands the Coder a concrete fix strategy; reset-to-clean restores the cumulative `applied` set (never drops correct earlier edits); the no-progress breaker is now 3-strikes + profile-gated. Per-role env (`AICODER_PLANNER_*` / `AICODER_CODER_*`, falling back to `AICODER_LLM_*`) lets the Planner run a strong reasoner and the Coder a fast code model. **Verified e2e on the 128GB M4 Max (Planner=gpt-oss:120b, Coder=qwen3-coder:30b)**: the 5-file `note` change converges at heal attempt 2 → real commit → `mvn test` 4/4 green, with the note test preserved.
+
+- **M4** dual-assessment Verifier (architecture gate). ArchUnit rules run INSIDE `mvn test`; `MavenBuildTool` no longer hard-codes `arch_passed` — it splits failing tests into architecture-rule vs functional via `architecture.test_pattern` (a glob over `{FQCN}.{method}`, default `*Architecture*`, active only when `architecture.fitness == archunit`), so the verdict is genuinely dual (functional / arch / both). A compile failure is charged to the functional axis. Wired in `app.py` (`MavenBuildTool(gateway, arch_test_pattern=…)`); the `VERIFY_FAIL` trace now carries `functional_passed`/`arch_passed`. **Proven on `eval/target`**: a protected `HexagonalArchitectureTest` (domain depends on nothing; application never touches adapters) passes on clean code and FAILS the instant a domain→adapters dependency is injected — the gate bites, functional stays green. Profiles set the pattern; with no archunit opt-in the behavior is unchanged (back-compat unit-tested in `tests/test_maven_build.py`).
 
 ### Eval harness (`eval/`, `eval/run_eval.py`) — tests-as-oracle
 Objective, repeatable scoring: golden tasks ship **pre-written tests that define "done"**; the agent implements code to make them pass and is REFUSED any write to a test file (`protected_globs` in the profile → orchestrator feeds tests to the Coder as read-only context and blocks writes, logging `WRITE_BLOCKED`). A green run is therefore a genuine pass — closes the "agent dropped the test, mvn still green" false positive. Two suites:
@@ -121,7 +123,6 @@ Run: `uv run python eval/run_eval.py [--suite lite|msfw] [task-ids…]` (set the
 ## Roadmap (next)
 - **Grow the eval suites** (DONE: harness + lite 3/3 + msfw 1/1 — see Status): more golden tasks (event-sourcing on
   Escrow, bugfix-style, budget-stressing), and a per-model leaderboard (swap env, re-run, compare pass-rate + heals).
-- **M4**: ArchUnit architecture gate inside `mvn test` (real dual-assessment Verifier).
 - **M5**: full git/PR flow + sandbox security boundary + parallel tasks (worktrees already in place).
 - **M6**: CI/CD + deploy with human approval gate.
 - Also pending: swap `InMemoryMemory` → PostgresMemory (Docker compose already provided); optional targeted single-file

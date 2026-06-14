@@ -9,6 +9,7 @@ same BuildToolPort — no core change.
 from __future__ import annotations
 
 import hashlib
+from fnmatch import fnmatch
 
 from aicoder.adapters.mcp_gateway import raise_for_response
 from aicoder.application.ports.outbound import MCPGatewayPort
@@ -16,8 +17,12 @@ from aicoder.domain.models import ToolRequest, VerificationResult
 
 
 class MavenBuildTool:
-    def __init__(self, gateway: MCPGatewayPort) -> None:
+    def __init__(self, gateway: MCPGatewayPort, *, arch_test_pattern: str | None = None) -> None:
         self._gateway = gateway
+        # When set (profile fitness == archunit), failing tests whose id matches
+        # this glob are ARCHITECTURE-rule failures, scored on the arch axis rather
+        # than the functional one — a real dual-assessment verdict (M4).
+        self._arch_pattern = arch_test_pattern
 
     def run_tests(
         self, module: str | None = None, test: str | None = None, workdir: str | None = None
@@ -36,8 +41,18 @@ class MavenBuildTool:
         exit_code = int(data.get("exit_code", 1))
         failed_tests = list(data.get("failed_tests", []))
 
-        functional_passed = exit_code == 0 and failures == 0 and errors == 0
-        arch_passed = True  # ArchUnit gate arrives in M4
+        # Split failing tests into architecture-rule vs functional (M4 dual gate).
+        if self._arch_pattern:
+            arch_failures = [t for t in failed_tests if fnmatch(t, self._arch_pattern)]
+        else:
+            arch_failures = []
+        func_failures = [t for t in failed_tests if t not in arch_failures]
+        # A non-zero exit with no parsed test failures is a build/compile failure —
+        # that's a functional problem, not an architectural one.
+        compile_failed = exit_code != 0 and not failed_tests
+
+        arch_passed = len(arch_failures) == 0
+        functional_passed = (not compile_failed) and len(func_failures) == 0
 
         # Maven prints COMPILER errors to stdout (not stderr, not surefire), so
         # without this the Coder gets no feedback on the most common failure —
