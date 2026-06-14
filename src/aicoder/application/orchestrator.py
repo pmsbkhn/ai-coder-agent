@@ -42,6 +42,7 @@ class Orchestrator:
         memory: MemoryPort,
         gateway: MCPGatewayPort,
         build: BuildToolPort,
+        deliver: str = "local",
     ) -> None:
         self._profile = profile
         self._planner = planner
@@ -49,6 +50,10 @@ class Orchestrator:
         self._memory = memory
         self._gateway = gateway
         self._build = build
+        # Delivery mode (M5): "local" = commit only (default), "push" = also push
+        # the branch to its remote, "pr" = push + open a pull request. Delivery is
+        # best-effort — it never fails an already-committed (DONE) run.
+        self._deliver = deliver
 
     # ------------------------------------------------------------------ #
     # Public entry point (RequirementPort)
@@ -121,9 +126,35 @@ class Orchestrator:
 
         session.record_pass()  # VERIFYING -> DONE
         self._tool("git", "commit", workdir=workdir, message=f"agent: {prompt[:60]}")
+        if self._deliver in ("push", "pr"):
+            self._run_delivery(session, workdir, prompt)
         self._log(session, "SESSION_DONE", {})
         self._memory.save_session(session)
         return session
+
+    def _run_delivery(self, session: AgentSession, workdir: str, prompt: str) -> None:
+        """Push the branch (and optionally open a PR) — best-effort: a delivery
+        failure (no remote, no auth) is logged but never fails the committed run."""
+        push = self._gateway.execute_tool_call(
+            ToolRequest(server="git", method="push", params={"workdir": workdir})
+        )
+        res = push.result or {}
+        if not push.ok or not res.get("ok"):
+            self._log(session, "DELIVERY_SKIPPED",
+                      {"reason": res.get("error") or push.error_message or "push failed"})
+            return
+        self._log(session, "PUSHED", {"remote": res.get("remote"), "branch": res.get("branch")})
+        if self._deliver != "pr":
+            return
+        pr = self._gateway.execute_tool_call(
+            ToolRequest(server="git", method="open_pr",
+                        params={"workdir": workdir, "title": f"agent: {prompt[:60]}"})
+        )
+        pres = pr.result or {}
+        if pr.ok and pres.get("ok"):
+            self._log(session, "PR_OPENED", {"url": pres.get("url")})
+        else:
+            self._log(session, "PR_SKIPPED", {"reason": pres.get("error") or "pr failed"})
 
     # ------------------------------------------------------------------ #
     # Per-task self-healing loop

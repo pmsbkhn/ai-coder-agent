@@ -79,6 +79,11 @@ class FakeGateway:
             return ToolResponse(ok=True, result={"exists": True, "content": "class A {}"})
         if s == "git" and m in ("write_file", "commit", "reset_clean"):
             return ToolResponse(ok=True, result={"ok": True, "commit": "abc123"})
+        if s == "git" and m == "push":
+            return ToolResponse(ok=True, result={"ok": True, "remote": "origin",
+                                                 "branch": "b", "pushed": True})
+        if s == "git" and m == "open_pr":
+            return ToolResponse(ok=True, result={"ok": True, "url": "https://example/pr/1"})
         return ToolResponse(ok=False, error_code=-32601, error_message=f"unknown {s}.{m}")
 
 
@@ -150,6 +155,30 @@ def test_m3_heal_reflects_and_resets_to_clean() -> None:
     assert gw.calls.count(("git", "reset_clean")) == 2
     # the Coder received the reflection strategy in its heal prompts
     assert "# Fix strategy" in coder.contexts[1] and "strategy #1" in coder.contexts[1]
+
+
+def test_deliver_local_does_not_push() -> None:
+    """Default delivery is local commit only — no push, no PR (M5)."""
+    plan = Plan(tasks=[Task(id="t1", description="x", target_files=["A.java"])])
+    gw = FakeGateway()
+    orch = _orchestrator(plan, FakeBuild([_passed()]), gateway=gw)  # deliver defaults to "local"
+    session = orch.run_requirement("x")
+    assert session.state is SessionState.DONE
+    assert ("git", "push") not in gw.calls
+
+
+def test_deliver_pr_pushes_and_opens_pr() -> None:
+    plan = Plan(tasks=[Task(id="t1", description="x", target_files=["A.java"])])
+    gw, mem = FakeGateway(), InMemoryMemory()
+    orch = Orchestrator(
+        profile=_PROFILE, planner=FakePlanner(plan), coder=FakeCoder(),
+        memory=mem, gateway=gw, build=FakeBuild([_passed()]), deliver="pr",
+    )
+    session = orch.run_requirement("x")
+    assert session.state is SessionState.DONE
+    assert ("git", "push") in gw.calls and ("git", "open_pr") in gw.calls
+    events = [t.event_type for t in mem.get_traces(session.session_id)]
+    assert "PUSHED" in events and "PR_OPENED" in events
 
 
 def test_circuit_breaker_trips_after_n_attempts() -> None:

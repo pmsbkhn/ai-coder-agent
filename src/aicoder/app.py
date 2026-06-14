@@ -47,6 +47,7 @@ def build_orchestrator(profile_path: str | Path) -> Orchestrator:
         memory=_build_memory(),
         gateway=gateway,
         build=MavenBuildTool(gateway, arch_test_pattern=_arch_pattern(profile)),
+        deliver=os.environ.get("AICODER_DELIVER", "local").lower(),
     )
 
 

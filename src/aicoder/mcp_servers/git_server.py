@@ -10,6 +10,7 @@ caller passes (the worktree path returned by start_task).
 from __future__ import annotations
 
 import os
+import shutil
 import subprocess
 from pathlib import Path
 
@@ -112,6 +113,43 @@ def commit(workdir: str, message: str) -> dict:
         return {"ok": False, "error": (done.stderr or done.stdout).strip()}
     sha = _git(["rev-parse", "HEAD"], Path(workdir)).stdout.strip()
     return {"ok": True, "commit": sha}
+
+
+@mcp.tool()
+def push(workdir: str, remote: str = "origin", branch: str = "") -> dict:
+    """Push the worktree's branch to a remote — the delivery step (M5). Empty
+    branch pushes the current HEAD. Best-effort: returns ok=False (never raises a
+    transport error) when no remote is configured, so a committed-but-unpushed run
+    degrades gracefully."""
+    wd = Path(workdir)
+    if not branch:
+        head = _git(["rev-parse", "--abbrev-ref", "HEAD"], wd)
+        if head.returncode != 0:
+            return {"ok": False, "error": head.stderr.strip(), "pushed": False}
+        branch = head.stdout.strip()
+    if remote not in _git(["remote"], wd).stdout.split():
+        return {"ok": False, "error": f"no remote '{remote}' configured", "pushed": False}
+    proc = _git(["push", "-u", remote, branch], wd)
+    if proc.returncode != 0:
+        return {"ok": False, "error": (proc.stderr or proc.stdout).strip(), "pushed": False}
+    return {"ok": True, "remote": remote, "branch": branch, "pushed": True}
+
+
+@mcp.tool()
+def open_pr(workdir: str, title: str, body: str = "", base: str = "main") -> dict:
+    """Open a pull request for the current branch via `gh` (GitHub). Requires a
+    GitHub remote + gh auth. Returns ok=False with a reason (never raises) when gh
+    is unavailable or PR creation fails, so it's safe to call opportunistically."""
+    if not shutil.which("gh"):
+        return {"ok": False, "error": "gh CLI not available"}
+    proc = subprocess.run(
+        ["gh", "pr", "create", "--title", title, "--body", body or title, "--base", base],
+        cwd=str(workdir), capture_output=True, text=True,
+        encoding="utf-8", errors="replace", stdin=subprocess.DEVNULL,
+    )
+    if proc.returncode != 0:
+        return {"ok": False, "error": (proc.stderr or proc.stdout).strip()}
+    return {"ok": True, "url": proc.stdout.strip()}
 
 
 @mcp.tool()

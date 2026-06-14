@@ -123,7 +123,12 @@ Run: `uv run python eval/run_eval.py [--suite lite|msfw] [--repeat N] [--timeout
 ## Roadmap (next)
 - **Grow the eval suites** (DONE: harness + lite 3/3 + msfw 1/1 — see Status): more golden tasks (event-sourcing on
   Escrow, bugfix-style, budget-stressing), and a per-model leaderboard (swap env, re-run, compare pass-rate + heals).
-- **M5**: full git/PR flow + sandbox security boundary + parallel tasks (worktrees already in place).
+- **M5** (in progress): **PR/delivery flow DONE** — git server `push` + `open_pr` (via `gh`); orchestrator runs a
+  best-effort delivery step after commit, gated by `AICODER_DELIVER=local|push|pr` (default `local` = commit only, so
+  behavior is unchanged). Delivery never fails an already-committed run (no remote/auth → logs `DELIVERY_SKIPPED`).
+  Push is proven against a local bare remote in `tests/test_git_delivery.py` (no GitHub touched). **Still pending: the
+  sandbox security boundary** (mvn + model-generated code currently run on the host) **and parallel tasks** (worktrees
+  exist). NOTE: the MSFW checkout has a real GitHub remote (`pmsbkhn/msfw`) — do NOT push/PR there without explicit user opt-in.
 - **M6**: CI/CD + deploy with human approval gate.
 - Also pending: optional targeted single-file heal edits to cut whole-file regeneration cost.
 
