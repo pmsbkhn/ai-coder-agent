@@ -1,9 +1,9 @@
 # 07 — Proposal / ADR: Explicit Design-First Phase
 
-**Status:** **Slices 1–2 IMPLEMENTED** (Designer role + DesignSpec/TestPlan;
-human gate + approved tests locked as the oracle); Slices 3–4 pending.
-**Viewpoint:** Decision. **Supersedes nothing; extends** AD-8/AD-9/AD-11/AD-15
-(`05-decisions.md`).
+**Status:** **Slices 1–3 IMPLEMENTED** (Designer role + DesignSpec/TestPlan; human
+gate + approved tests locked as the oracle; complexity tiering); Slice 4 (adversarial
+test review) pending. **Viewpoint:** Decision. **Supersedes nothing; extends**
+AD-8/AD-9/AD-11/AD-15 (`05-decisions.md`).
 
 > This document is itself the "design output before code" that the proposal
 > advocates — written and reviewable *before* any implementation.
@@ -127,7 +127,13 @@ stateDiagram-v2
    BLOCKED, kind-specific approval). Proven e2e: gpt-oss proposed an
    `AccountWithdrawTest`, it was approved + locked, and the Coder implemented
    `withdraw` to pass its own approved test → green at 0 heals.
-3. **Slice 3 — Tiering + config:** `design.mode` + complexity heuristic; trivial path unchanged.
+3. **Slice 3 — Tiering + config — ✅ DONE.** `design.mode = off | auto | always`.
+   `auto` designs only **complex** changes (the deterministic heuristic `_is_complex`:
+   more than one task OR more than one touched file — single-file/single-task changes
+   skip design and log `DESIGN_SKIPPED`, since the Coder reliably one-shots those);
+   `always` bypasses the heuristic; `off` is the fast path. No extra LLM call — the
+   decision is derived from the plan already in hand. Unit-tested (auto-skips-trivial,
+   auto-designs-complex, always-overrides).
 4. **Slice 4 — Adversarial test review (optional):** a second pass critiques the TestPlan before locking.
 
 **Acceptance (e2e on the eval target):** given a non-trivial requirement, the agent

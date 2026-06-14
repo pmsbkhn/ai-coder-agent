@@ -113,7 +113,7 @@ class Orchestrator:
 
         # ---- design-first (M07): produce a design + test plan; if a human gate is
         # wired, lock the approved tests as the oracle the Coder must satisfy. ----
-        locked, proceed = self._run_design(session, prompt, repo_map, workdir)
+        locked, proceed = self._run_design(session, prompt, repo_map, workdir, plan)
         if not proceed:
             self._memory.save_session(session)
             return session
@@ -158,17 +158,29 @@ class Orchestrator:
         self._memory.save_session(session)
         return session
 
+    def _is_complex(self, plan: Plan) -> bool:
+        """Tiering heuristic (Slice 3): a change is 'complex enough to design' when it
+        spans more than one task or touches more than one file. Single-file,
+        single-task changes are where the Coder reliably one-shots (empirically), so
+        they skip design. Deterministic, derived from the plan we already have."""
+        unique_files = {f for t in plan.tasks for f in t.target_files}
+        return len(plan.tasks) > 1 or len(unique_files) > 1
+
     def _run_design(
-        self, session: AgentSession, prompt: str, repo_map: str, workdir: str
+        self, session: AgentSession, prompt: str, repo_map: str, workdir: str, plan: Plan
     ) -> tuple[set[str], bool]:
         """M07 design-first. Returns (locked_test_paths, proceed).
 
         - design off / no designer → ([], True): current fast path.
+        - mode "auto" + trivial change → skip (DESIGN_SKIPPED), ([], True).
         - designer but NO approval port → produce + log only (Slice 1), ([], True).
         - designer + approval (Slice 2) → write the proposed tests, gate on a human;
           on approve, LOCK them as the oracle ([paths], True); on reject → BLOCKED ([], False).
         """
-        if self._designer is None or self._design_mode not in ("auto", "always"):
+        if self._designer is None or self._design_mode == "off":
+            return set(), True
+        if self._design_mode == "auto" and not self._is_complex(plan):
+            self._log(session, "DESIGN_SKIPPED", {"reason": "trivial: single task, single file"})
             return set(), True
 
         spec = self._designer.propose_design(prompt, repo_map)

@@ -140,3 +140,40 @@ def test_rejected_design_blocks_before_coding() -> None:
     assert "DESIGN_REJECTED" in events
     assert "DIFF_APPLIED" not in events     # never reached coding
     assert coder.contexts == []             # Coder never called
+
+
+# --- Slice 3: tiering — auto designs complex changes, skips trivial ones --------
+
+_TRIVIAL = Plan(tasks=[Task(id="t1", description="x", target_files=["A.java"])])
+_COMPLEX = Plan(tasks=[Task(id="t1", description="x", target_files=["A.java", "B.java"])])
+
+
+def _orch_with_plan(plan, design_mode, designer, mem):
+    return Orchestrator(
+        profile=_PROFILE, planner=FakePlanner(plan), coder=FakeCoder(),
+        memory=mem, gateway=FakeGateway(), build=FakeBuild([_passed()]),
+        designer=designer, design_mode=design_mode,
+    )
+
+
+def test_auto_skips_trivial_change() -> None:
+    mem, designer = InMemoryMemory(), FakeDesigner()
+    session = _orch_with_plan(_TRIVIAL, "auto", designer, mem).run_requirement("x")
+    assert session.state is SessionState.DONE
+    assert designer.calls == 0
+    events = [t.event_type for t in mem.get_traces(session.session_id)]
+    assert "DESIGN_SKIPPED" in events and "DESIGN_PROPOSED" not in events
+
+
+def test_auto_designs_complex_change() -> None:
+    mem, designer = InMemoryMemory(), FakeDesigner()
+    session = _orch_with_plan(_COMPLEX, "auto", designer, mem).run_requirement("x")
+    assert session.state is SessionState.DONE
+    assert designer.calls == 1
+    assert "DESIGN_PROPOSED" in [t.event_type for t in mem.get_traces(session.session_id)]
+
+
+def test_always_designs_even_trivial() -> None:
+    mem, designer = InMemoryMemory(), FakeDesigner()
+    _orch_with_plan(_TRIVIAL, "always", designer, mem).run_requirement("x")
+    assert designer.calls == 1   # 'always' bypasses the tiering heuristic
