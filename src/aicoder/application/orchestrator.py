@@ -30,6 +30,7 @@ from aicoder.application.ports.outbound import (
     PlannerPort,
     ReviewPort,
 )
+from aicoder.application.design_docs import ad_path, render_ad, render_tech_spec, tech_spec_path
 from aicoder.application.profile import ProjectProfile
 from aicoder.domain.errors import ToolInvocationError
 from aicoder.domain.models import ExecutionTrace, SessionState, Task, ToolRequest
@@ -115,9 +116,14 @@ class Orchestrator:
         ws = self._tool("git", "start_task", branch=branch)
         workdir = ws.get("worktree") or self._profile.target.repo_path
 
-        # ---- design-first (M07): produce a design + test plan; if a human gate is
-        # wired, lock the approved tests as the oracle the Coder must satisfy. ----
-        locked, proceed = self._run_design(session, prompt, repo_map, workdir, plan)
+        # Cumulative change (latest content per path). Tracked so a reset-to-clean
+        # heal (M3) restores everything — including the design docs + locked tests
+        # written below, which are otherwise untracked and wiped by `git clean -fd`.
+        applied: dict[str, str] = {}
+
+        # ---- design-first (M07): write the AD + Tech Spec files and (if gated) lock
+        # the approved tests as the oracle the Coder must satisfy. ----
+        locked, proceed = self._run_design(session, prompt, repo_map, workdir, plan, applied)
         if not proceed:
             self._memory.save_session(session)
             return session
@@ -134,10 +140,6 @@ class Orchestrator:
         all_targets = _unique(
             [f for task in plan.tasks for f in task.target_files] + protected
         )
-        # Cumulative change (latest content per path). Tracked so a heal that
-        # re-emits only SOME files never loses correct edits from earlier ones
-        # when the worktree is reset to clean (M3).
-        applied: dict[str, str] = {}
         session.start_coding()  # PLANNING/AWAITING_APPROVAL -> CODING
         for task in plan.tasks:
             files = self._read_files(workdir, all_targets)
@@ -171,7 +173,8 @@ class Orchestrator:
         return len(plan.tasks) > 1 or len(unique_files) > 1
 
     def _run_design(
-        self, session: AgentSession, prompt: str, repo_map: str, workdir: str, plan: Plan
+        self, session: AgentSession, prompt: str, repo_map: str, workdir: str, plan: Plan,
+        applied: dict[str, str],
     ) -> tuple[set[str], bool]:
         """M07 design-first. Returns (locked_test_paths, proceed).
 
@@ -188,21 +191,25 @@ class Orchestrator:
             return set(), True
 
         spec = self._designer.propose_design(prompt, repo_map)
+        # Materialize the explicit design artifacts: one umbrella AD + one Tech Spec
+        # per bounded context (1 BC = 1 Tech Spec), written into the worktree so they
+        # are reviewable and commit alongside the change.
+        docs = self._write_design_docs(workdir, spec, prompt, applied)
         self._log(session, "DESIGN_PROPOSED", {
             "summary": spec.summary[:500],
-            "affected": spec.affected,
-            "interface_changes": spec.interface_changes,
-            "proposed_tests": [t.path for t in spec.test_plan],
+            "bounded_contexts": spec.bounded_contexts,
+            "docs": docs,
+            "proposed_tests": [t.path for t in spec.all_tests()],
         })
         if self._approval is None:
-            return set(), True  # Slice-1 behavior: produced + logged, not gated
+            return set(), True  # Slice-1 behavior: AD + Tech Specs written + logged, not gated
 
         # Slice 4: adversarial review of the proposed tests BEFORE locking. Advisory
-        # by default (concerns surfaced to the human); review_strict auto-blocks.
+        # by default (concerns surfaced to the architect); review_strict auto-blocks.
         review = None
         if self._reviewer is not None:
             review = self._reviewer.review_tests(
-                prompt, spec.summary, [t.content for t in spec.test_plan]
+                prompt, spec.summary, [t.content for t in spec.all_tests()]
             )
             self._log(session, "TEST_REVIEW", {"ok": review.ok, "concerns": review.concerns[:10]})
             if not review.ok and self._profile.design.review_strict:
@@ -211,23 +218,46 @@ class Orchestrator:
                 session.transition_to(SessionState.BLOCKED)  # from PLANNING
                 return set(), False
 
-        # Slice 2: write the proposed tests, then gate on a human before locking them.
+        # Write the proposed tests, then gate on the ARCHITECT before locking them.
         session.start_designing()  # PLANNING -> DESIGNING
         locked: set[str] = set()
-        for t in spec.test_plan:
+        for t in spec.all_tests():
             self._tool("git", "write_file", workdir=workdir, path=t.path, content=t.content)
             locked.add(t.path.replace("\\", "/"))
+            applied[t.path.replace("\\", "/")] = t.content  # survive reset-to-clean
         session.await_approval()  # DESIGNING -> AWAITING_APPROVAL
         concerns = review.concerns[:10] if review else []
         self._log(session, "APPROVAL_REQUESTED",
-                  {"action": "design", "tests": sorted(locked), "review_concerns": concerns})
-        summary = f"design: {prompt[:60]}" + (f" — {len(concerns)} review concern(s)" if concerns else "")
+                  {"action": "architect_review", "docs": docs,
+                   "tests": sorted(locked), "review_concerns": concerns})
+        summary = (f"architect review — {len(spec.tech_specs)} tech spec(s) across "
+                   f"{spec.bounded_contexts}; {len(locked)} test(s)"
+                   + (f"; {len(concerns)} review concern(s)" if concerns else ""))
         if self._approval.request_approval("design", summary):
-            self._log(session, "DESIGN_APPROVED", {"locked_tests": sorted(locked)})
+            self._log(session, "DESIGN_APPROVED", {"docs": docs, "locked_tests": sorted(locked)})
             return locked, True  # session left in AWAITING_APPROVAL; start_coding advances it
         session.reject_design()  # AWAITING_APPROVAL -> BLOCKED
         self._log(session, "DESIGN_REJECTED", {})
         return set(), False
+
+    def _write_design_docs(
+        self, workdir: str, spec, requirement: str, applied: dict[str, str]
+    ) -> list[str]:
+        """Render + write the AD (umbrella) and one Tech Spec per bounded context.
+        Recorded in `applied` so a reset-to-clean heal restores them and they commit
+        with the change."""
+        docs_dir = self._profile.design.docs_dir
+        paths: list[str] = []
+
+        def _write(path: str, content: str) -> None:
+            self._tool("git", "write_file", workdir=workdir, path=path, content=content)
+            applied[path] = content
+            paths.append(path)
+
+        _write(ad_path(docs_dir), render_ad(spec, requirement, docs_dir))
+        for ts in spec.tech_specs:
+            _write(tech_spec_path(ts, docs_dir), render_tech_spec(ts))
+        return paths
 
     def _maybe_deploy(self, session: AgentSession, workdir: str, prompt: str) -> None:
         """M6 gated deploy: only for a green change, only with a configured deploy

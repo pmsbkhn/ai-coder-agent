@@ -53,6 +53,9 @@ class DesignConfig(BaseModel):
     # Slice 4: when true, a failed adversarial test review auto-blocks the run
     # (before the human gate). Default false = advisory (concerns surfaced to the human).
     review_strict: bool = False
+    # Where the design artifacts (AD + one Tech Spec per bounded context) are written
+    # in the target worktree, so they commit alongside the change.
+    docs_dir: str = "docs/design"
 
 
 class DeployConfig(BaseModel):

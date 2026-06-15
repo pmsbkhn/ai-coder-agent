@@ -18,12 +18,19 @@ _PROFILE = load_profile(Path(__file__).resolve().parents[1] / "profiles" / "msfw
 
 _VALID_DESIGN = {
     "summary": "Add a nullable note to Order and thread it to OrderPlaced.",
-    "affected": ["Order.java", "OrderPlaced.java"],
-    "interface_changes": ["OrderService.placeOrder(customer, amount, note)"],
-    "adr_notes": "Overload keeps the 2-arg call working.",
-    "test_plan": [
-        {"path": "src/test/java/com/example/OrderNoteTest.java",
-         "content": "class OrderNoteTest {}", "rationale": "note flows to the event"},
+    "decisions": ["Keep the 2-arg placeOrder working via an overload."],
+    "tech_specs": [
+        {
+            "bounded_context": "Orders",
+            "summary": "Order carries an optional note that reaches OrderPlaced.",
+            "affected": ["Order.java", "OrderPlaced.java"],
+            "interface_changes": ["OrderService.placeOrder(customer, amount, note)"],
+            "adr_notes": "Overload, not a breaking signature change.",
+            "test_plan": [
+                {"path": "src/test/java/com/example/OrderNoteTest.java",
+                 "content": "class OrderNoteTest {}", "rationale": "note flows to the event"},
+            ],
+        },
     ],
 }
 
@@ -46,20 +53,36 @@ def _passed() -> VerificationResult:
 
 
 class FakeDesigner:
-    def __init__(self) -> None:
+    def __init__(self, design: dict | None = None) -> None:
         self.calls = 0
+        self._design = design or _VALID_DESIGN
 
     def propose_design(self, requirement: str, repo_map: str) -> DesignSpec:
         self.calls += 1
-        return DesignSpec.model_validate(_VALID_DESIGN)
+        return DesignSpec.model_validate(self._design)
+
+
+class _RecordingGateway(FakeGateway):
+    """Captures the paths written, to assert the AD + Tech Spec files appear."""
+    def __init__(self) -> None:
+        super().__init__()
+        self.writes: list[str] = []
+
+    def execute_tool_call(self, request):
+        if request.server == "git" and request.method == "write_file":
+            self.writes.append(request.params.get("path"))
+        return super().execute_tool_call(request)
 
 
 def test_llm_designer_returns_valid_spec() -> None:
     designer = LLMDesigner(FakeLLM([_VALID_DESIGN]), _PROFILE)
     spec = designer.propose_design("add a note field", "# Repo Map\nclass Order")
     assert isinstance(spec, DesignSpec)
-    assert spec.test_plan[0].path.endswith("OrderNoteTest.java")
-    assert "OrderService" in spec.interface_changes[0]
+    assert spec.bounded_contexts == ["Orders"]                     # 1 BC = 1 tech spec
+    ts = spec.tech_specs[0]
+    assert ts.test_plan[0].path.endswith("OrderNoteTest.java")
+    assert "OrderService" in ts.interface_changes[0]
+    assert spec.all_tests()[0].path.endswith("OrderNoteTest.java")
 
 
 def _orch(design_mode, designer, mem):
@@ -237,3 +260,61 @@ def test_review_advisory_surfaces_concerns_then_human_approves() -> None:
     payload = next(t.payload for t in mem.get_traces(session.session_id)
                    if t.event_type == "APPROVAL_REQUESTED")
     assert payload["review_concerns"] == ["missing the insufficient-funds case"]
+
+
+# --- Explicit AD + Tech Spec files (1 bounded context = 1 tech spec) ------------
+
+from aicoder.application.design_docs import render_ad, render_tech_spec  # noqa: E402
+
+_TWO_BC = {
+    "summary": "Touch two contexts.",
+    "decisions": ["Keep the contexts decoupled — integrate via events only."],
+    "tech_specs": [
+        {"bounded_context": "Orders", "summary": "order side",
+         "affected": ["Order.java"], "interface_changes": [], "adr_notes": "",
+         "test_plan": [{"path": "src/test/java/OrdersT.java", "content": "//", "rationale": "x"}]},
+        {"bounded_context": "Payment", "summary": "payment side",
+         "affected": ["Escrow.java"], "interface_changes": [], "adr_notes": "",
+         "test_plan": [{"path": "src/test/java/PaymentT.java", "content": "//", "rationale": "y"}]},
+    ],
+}
+
+
+def test_design_writes_ad_and_tech_spec_files() -> None:
+    mem = InMemoryMemory()
+    plan = Plan(tasks=[Task(id="t1", description="x", target_files=["A.java"])])
+    gw = _RecordingGateway()
+    orch = Orchestrator(
+        profile=_PROFILE, planner=FakePlanner(plan), coder=FakeCoder(),
+        memory=mem, gateway=gw, build=FakeBuild([_passed()]),
+        designer=FakeDesigner(), design_mode="always", approval=_Approval(True),
+    )
+    session = orch.run_requirement("x")
+    assert session.state is SessionState.DONE
+    assert "docs/design/AD.md" in gw.writes
+    assert "docs/design/techspec-orders.md" in gw.writes
+    docs = next(t.payload["docs"] for t in mem.get_traces(session.session_id)
+                if t.event_type == "DESIGN_PROPOSED")
+    assert "docs/design/AD.md" in docs and "docs/design/techspec-orders.md" in docs
+
+
+def test_one_tech_spec_file_per_bounded_context() -> None:
+    mem = InMemoryMemory()
+    plan = Plan(tasks=[Task(id="t1", description="x", target_files=["A.java"])])
+    gw = _RecordingGateway()
+    orch = Orchestrator(
+        profile=_PROFILE, planner=FakePlanner(plan), coder=FakeCoder(),
+        memory=mem, gateway=gw, build=FakeBuild([_passed()]),
+        designer=FakeDesigner(_TWO_BC), design_mode="always", approval=_Approval(True),
+    )
+    orch.run_requirement("x")
+    specs = [w for w in gw.writes if "techspec-" in w]
+    assert specs == ["docs/design/techspec-orders.md", "docs/design/techspec-payment.md"]
+
+
+def test_renderers_produce_ad_and_tech_spec_markdown() -> None:
+    spec = DesignSpec.model_validate(_VALID_DESIGN)
+    ad = render_ad(spec, "add a note", "docs/design")
+    assert "# Architecture Description" in ad and "Orders" in ad and "techspec-orders.md" in ad
+    ts = render_tech_spec(spec.tech_specs[0])
+    assert "# Tech Spec — Orders" in ts and "OrderNoteTest.java" in ts

@@ -67,16 +67,35 @@ class ProposedTest(BaseModel):
     rationale: str = ""
 
 
-class DesignSpec(BaseModel):
-    """A *delta* design produced by the DesignPort before coding: what changes and
-    the executable test cases that encode 'done'. Prose is kept light — the binding
-    artifacts are the proposed tests (and, where relevant, architecture rules)."""
+class TechSpec(BaseModel):
+    """The technical specification for ONE bounded context (1 BC = 1 Tech Spec).
+    Carries that context's delta: components touched, interface/contract changes,
+    rationale, and the executable acceptance tests for it."""
 
+    bounded_context: str                                         # the BC this spec governs
     summary: str
     affected: list[str] = Field(default_factory=list)            # components/files touched
     interface_changes: list[str] = Field(default_factory=list)   # contract/interface deltas
-    adr_notes: str = ""                                          # short rationale
+    adr_notes: str = ""                                          # short rationale / decisions
     test_plan: list[ProposedTest] = Field(default_factory=list)
+
+
+class DesignSpec(BaseModel):
+    """The design output for one change — an umbrella **Architecture Description**
+    (system-level summary + cross-cutting decisions) plus one **Tech Spec per
+    bounded context** (1 BC = 1 Tech Spec). Materialized to files and reviewed by
+    an architect before coding."""
+
+    summary: str                                                 # AD-level: the change across the system
+    decisions: list[str] = Field(default_factory=list)           # cross-cutting / integration decisions
+    tech_specs: list[TechSpec] = Field(default_factory=list)     # one per bounded context
+
+    @property
+    def bounded_contexts(self) -> list[str]:
+        return [ts.bounded_context for ts in self.tech_specs]
+
+    def all_tests(self) -> list[ProposedTest]:
+        return [t for ts in self.tech_specs for t in ts.test_plan]
 
 
 class TestReview(BaseModel):

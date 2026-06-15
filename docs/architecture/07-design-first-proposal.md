@@ -127,6 +127,12 @@ stateDiagram-v2
    BLOCKED, kind-specific approval). Proven e2e: gpt-oss proposed an
    `AccountWithdrawTest`, it was approved + locked, and the Coder implemented
    `withdraw` to pass its own approved test → green at 0 heals.
+   **Materialized artifacts:** the design is written as explicit, reviewable files in
+   the target worktree — one umbrella **Architecture Description** (`docs/design/AD.md`)
+   plus **one Tech Spec per bounded context** (`docs/design/techspec-<bc>.md`; **1 BC
+   = 1 Tech Spec**) — committed with the change; the architect reviews these at the
+   gate. Docs + locked tests are recorded in the cumulative `applied` set so a
+   reset-to-clean heal cannot wipe them. (`profile.design.docs_dir`, default `docs/design`.)
 3. **Slice 3 — Tiering + config — ✅ DONE.** `design.mode = off | auto | always`.
    `auto` designs only **complex** changes (the deterministic heuristic `_is_complex`:
    more than one task OR more than one touched file — single-file/single-task changes
