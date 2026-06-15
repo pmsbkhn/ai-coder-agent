@@ -47,17 +47,19 @@ class HealingConfig(BaseModel):
 
 class AnalysisConfig(BaseModel):
     # Analysis phase (ADR-08), runs BEFORE design. "off" = fast path, no analysis
-    # (default); "always" / "auto" = run the Analyst for every requirement. When the
-    # Analyst flags a requirement as genuinely ambiguous, the run blocks on the
-    # clarification gate (ApprovalPort kind="clarification") unless approved.
+    # (default); "always" = analyze every requirement; "auto" = analyze only
+    # non-trivial requirements (plan-free complexity tiering, Slice 4 — see
+    # application/tiering.py; skips clearly-trivial changes, logs ANALYSIS_SKIPPED).
+    # When the Analyst flags a requirement as genuinely ambiguous, the run blocks on
+    # the clarification gate (ApprovalPort kind="clarification") unless approved.
     mode: str = "off"
 
 
 class DesignConfig(BaseModel):
     # Design-first phase (M07), runs BEFORE planning. "off" = fast path, no design
-    # (default); "always" / "auto" = run the Designer for every requirement. ("auto"
-    # used to tier on the plan, but design now precedes the plan, so it behaves like
-    # "always"; plan-free tiering is deferred to the Analysis phase, ADR-08.)
+    # (default); "always" = design every requirement; "auto" = design only non-trivial
+    # requirements (plan-free complexity tiering, ADR-08 Slice 4 — see
+    # application/tiering.py; skips clearly-trivial changes, logs DESIGN_SKIPPED).
     mode: str = "off"
     # Slice 4: when true, a failed adversarial test review auto-blocks the run
     # (before the human gate). Default false = advisory (concerns surfaced to the human).

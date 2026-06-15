@@ -4,10 +4,11 @@
 human gate + approved tests locked as the oracle; adversarial test review).
 **Pipeline reordered: Design runs BEFORE Planning** — a plan is the implementer's
 decomposition, not a gate before design, so a flaky/empty plan can no longer block
-the design. Plan-keyed complexity tiering was **removed** (it needed a plan in hand);
-tiering is deferred to the future Analysis phase (ADR-08), so `auto` now designs like
-`always`. Promote to an accepted AD. **Viewpoint:** Decision. **Supersedes nothing;
-extends** AD-8/AD-9/AD-11/AD-15 (`05-decisions.md`).
+the design. Plan-keyed complexity tiering was **removed** (it needed a plan in hand)
+and **replaced** by a plan-free, text-based heuristic now shared with the Analysis
+phase (ADR-08 Slice 4, `application/tiering.py`): `auto` designs only non-trivial
+requirements, `always` designs every one. Promote to an accepted AD. **Viewpoint:**
+Decision. **Supersedes nothing; extends** AD-8/AD-9/AD-11/AD-15 (`05-decisions.md`).
 
 > This document is itself the "design output before code" that the proposal
 > advocates — written and reviewable *before* any implementation.
@@ -146,15 +147,16 @@ The saga briefly re-enters `PLANNING`: `INIT → PLANNING → DESIGNING → AWAI
    = 1 Tech Spec**) — committed with the change; the architect reviews these at the
    gate. Docs + locked tests are recorded in the cumulative `applied` set so a
    reset-to-clean heal cannot wipe them. (`profile.design.docs_dir`, default `docs/design`.)
-3. **Slice 3 — Config + tiering — ✅ DONE, then revised by the reorder.** `design.mode
+3. **Slice 3 — Config + tiering — ✅ DONE, reworked by the reorder.** `design.mode
    = off | auto | always`. `off` is the fast path (no design). Originally `auto` designed
    only **complex** changes via a deterministic `_is_complex` heuristic (more than one
    task OR touched file) — but that read the plan, and the **pipeline reorder moved design
-   ahead of the plan**, so there is no plan to tier on at design time. `_is_complex` and
-   the `DESIGN_SKIPPED` branch were **removed**; `auto` now designs like `always`.
-   Plan-free tiering (cheap signals: requirement length, file-count estimate, or the
-   future **Analysis** phase's ambiguity verdict) is deferred to ADR-08. Unit-tested
-   (`auto` designs when enabled; `always` designs; `off` skips).
+   ahead of the plan**, so there was no plan to tier on. The plan-keyed `_is_complex`
+   was **removed and replaced** by a plan-free, text-based heuristic shared with the
+   Analysis phase (`application/tiering.py`, ADR-08 Slice 4): `auto` now tiers on the
+   requirement's SCOPE + VAGUENESS (not file count), logs `DESIGN_SKIPPED` on trivial
+   changes; `always` ignores it; `off` skips. Unit-tested (`tests/test_designer.py`
+   auto-skips-trivial / auto-designs-complex / always-designs; `tests/test_tiering.py`).
 4. **Slice 4 — Adversarial test review — ✅ DONE.** A `ReviewPort` + `LLMReviewer`
    (the `reviewer` role, ideally a DIFFERENT model from the Designer) critiques the
    proposed TestPlan before locking: trivially-satisfiable? missing edge cases?

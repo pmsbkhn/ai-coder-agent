@@ -1,11 +1,12 @@
 # 08 — Proposal / ADR: Explicit Analysis (Requirement-Clarification) Phase
 
-**Status:** **Slices 1+2+3 IMPLEMENTED** (Analyst role + AnalysisSpec, run before
-design; clarification gate on ambiguous requirements; analysis→design hand-off so the
-proposed tests trace to the analyzed acceptance criteria). Slice 4 (tiering) remains
-proposed. **Viewpoint:** Decision. **Complements** ADR-07
-(`07-design-first-proposal.md`): ADR-07 made *design* (HOW) explicit; this makes
-*analysis* (WHAT) explicit, one phase earlier, and feeds it forward.
+**Status:** **IMPLEMENTED — all 4 slices done** (Analyst role + AnalysisSpec, run
+before design; clarification gate on ambiguous requirements; analysis→design hand-off
+so the proposed tests trace to the analyzed acceptance criteria; plan-free complexity
+tiering shared by the analysis & design phases). Promote to an accepted AD.
+**Viewpoint:** Decision. **Complements** ADR-07 (`07-design-first-proposal.md`):
+ADR-07 made *design* (HOW) explicit; this makes *analysis* (WHAT) explicit, one phase
+earlier, and feeds it forward.
 
 > Like ADR-07, this document is itself the design-before-code artifact it advocates.
 
@@ -126,7 +127,23 @@ stateDiagram-v2
    criteria reach the Designer + trace logged; no trace when analysis is off). Proven
    e2e on gpt-oss:120b: the `note` requirement's 6 acceptance criteria mapped onto 3
    proposed tests (OrderTest / OrderPlacedTest / OrderServiceTest) covering each.
-4. **Slice 4 (optional) — tiering:** the plan-free complexity tiering removed from ADR-07 lands here (cheap signals / the ambiguity verdict), and/or fold analysis+design into one gate when both are on.
+4. **Slice 4 — Tiering — ✅ DONE.** A plan-free, deterministic complexity heuristic
+   (`application/tiering.py`, `estimate_complexity`) shared by BOTH the analysis and
+   design phases: `auto` mode runs the phase only on non-trivial requirements and skips
+   clearly-trivial ones (logs `ANALYSIS_SKIPPED` / `DESIGN_SKIPPED`); `always` ignores
+   it; `off` never runs. It deliberately tiers on **scope** (multi-step keywords:
+   manage / workflow / migrate / multiple sentences…) and **vagueness** (aspiration
+   without a concrete change: better / improve / enhance…), NOT implementation size —
+   because a short, vague requirement ("make orders better") is exactly the one that
+   most needs analysis, while a length-only heuristic would wave it through. It leans
+   **complex** on purpose: a false "trivial" (skipping analysis on an under-specified
+   requirement) is worse than a false "complex" (a phase runs that wasn't strictly
+   needed). The decision is transparent — the signals are logged in a `TIERING` event,
+   not hidden in an LLM call. Unit-tested (`tests/test_tiering.py` + orchestrator
+   auto-skip/auto-run tests in `test_analyst.py` / `test_designer.py`). Proven on the
+   real model: "make orders better" → AMBIGUOUS-worthy (tiered complex), the `note`
+   change → fast path. (Folding analysis+design into one combined gate when both are on
+   remains a possible future refinement.)
 
 **Acceptance (e2e on the eval target):** an under-specified requirement produces an
 AnalysisSpec with open questions → the agent blocks at the clarification gate (or
