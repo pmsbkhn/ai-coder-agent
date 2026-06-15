@@ -179,13 +179,16 @@ def _orch_with_plan(plan, design_mode, designer, mem):
     )
 
 
-def test_auto_skips_trivial_change() -> None:
+def test_auto_designs_when_enabled() -> None:
+    # Design now runs BEFORE planning, so there is no plan to tier on — `auto`
+    # designs like `always` (plan-based tiering was removed; tiering is deferred to
+    # the future Analysis phase). `off` is the fast path (test_design_skipped_by_default).
     mem, designer = InMemoryMemory(), FakeDesigner()
     session = _orch_with_plan(_TRIVIAL, "auto", designer, mem).run_requirement("x")
     assert session.state is SessionState.DONE
-    assert designer.calls == 0
+    assert designer.calls == 1
     events = [t.event_type for t in mem.get_traces(session.session_id)]
-    assert "DESIGN_SKIPPED" in events and "DESIGN_PROPOSED" not in events
+    assert "DESIGN_PROPOSED" in events
 
 
 def test_auto_designs_complex_change() -> None:
@@ -199,7 +202,19 @@ def test_auto_designs_complex_change() -> None:
 def test_always_designs_even_trivial() -> None:
     mem, designer = InMemoryMemory(), FakeDesigner()
     _orch_with_plan(_TRIVIAL, "always", designer, mem).run_requirement("x")
-    assert designer.calls == 1   # 'always' bypasses the tiering heuristic
+    assert designer.calls == 1   # 'always' designs every requirement
+
+
+def test_design_runs_before_an_empty_plan_blocks() -> None:
+    # Regression for the reorder: design runs BEFORE planning, so a flaky/empty plan
+    # can no longer suppress the design. The run still BLOCKS on the empty plan, but
+    # only AFTER the design was proposed (and, here, approved).
+    mem = InMemoryMemory()
+    session = _orch_with_plan(Plan(tasks=[]), "always", FakeDesigner(), mem).run_requirement("x")
+    assert session.state is SessionState.BLOCKED
+    events = [t.event_type for t in mem.get_traces(session.session_id)]
+    assert "DESIGN_PROPOSED" in events       # design happened first...
+    assert events.index("DESIGN_PROPOSED") < events.index("EMPTY_PLAN")  # ...before the empty-plan block
 
 
 # --- Slice 4: adversarial test review before locking ---------------------------

@@ -49,7 +49,7 @@ flowchart TD
     amode -->|off| fast["Planner → Designer → Coder (unchanged)"]
     amode -->|auto / always| an["Analyst → AnalysisSpec<br/>restate · assumptions · open questions · acceptance criteria"]
     an --> amb{"genuinely ambiguous?"}
-    amb -->|no| plan["→ PLANNING → DESIGNING → CODING"]
+    amb -->|no| plan["→ DESIGNING → PLANNING → CODING"]
     amb -->|yes| cgate{"clarification gate (human)"}
     cgate -->|proceed on assumptions| plan
     cgate -->|needs clarification| blocked["BLOCKED — open questions logged; human refines the requirement and re-runs"]
@@ -66,8 +66,8 @@ stateDiagram-v2
     ANALYZING --> AWAITING_CLARIFICATION: ambiguous
     AWAITING_CLARIFICATION --> PLANNING: human → proceed on assumptions
     AWAITING_CLARIFICATION --> BLOCKED: human → needs clarification (re-run)
-    PLANNING --> DESIGNING
-    PLANNING --> CODING
+    PLANNING --> DESIGNING: design enabled (before plan; see ADR-07)
+    PLANNING --> CODING: design off
 ```
 
 ## What it reuses
@@ -86,8 +86,8 @@ stateDiagram-v2
 - **Port** `AnalysisPort` (outbound): `analyze(requirement, repo_map) -> AnalysisSpec`.
 - **Adapter** `adapters/analyst_llm.py` (`LLMAnalyst`, analyst role).
 - **Session states** `ANALYZING`, `AWAITING_CLARIFICATION` (+ transitions).
-- **Config** `analysis.mode = off | auto | always` (auto tiers like design); `ApprovalPort.kind` gains `"clarification"`.
-- **Orchestrator** `_run_analysis()` before planning; on ambiguous → clarification gate; pass acceptance criteria forward to `_run_design`.
+- **Config** `analysis.mode = off | auto | always`; `ApprovalPort.kind` gains `"clarification"`.
+- **Orchestrator** `_run_analysis()` first (before `_run_design`, which is before planning); on ambiguous → clarification gate; pass acceptance criteria forward to `_run_design`. Analysis is the natural home for the plan-free complexity tiering that ADR-07's reorder removed.
 
 ## Risks & mitigations
 

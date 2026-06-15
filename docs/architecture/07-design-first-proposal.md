@@ -1,9 +1,13 @@
 # 07 — Proposal / ADR: Explicit Design-First Phase
 
 **Status:** **IMPLEMENTED — all 4 slices done** (Designer role + DesignSpec/TestPlan;
-human gate + approved tests locked as the oracle; complexity tiering; adversarial
-test review). Promote to an accepted AD. **Viewpoint:** Decision. **Supersedes
-nothing; extends** AD-8/AD-9/AD-11/AD-15 (`05-decisions.md`).
+human gate + approved tests locked as the oracle; adversarial test review).
+**Pipeline reordered: Design runs BEFORE Planning** — a plan is the implementer's
+decomposition, not a gate before design, so a flaky/empty plan can no longer block
+the design. Plan-keyed complexity tiering was **removed** (it needed a plan in hand);
+tiering is deferred to the future Analysis phase (ADR-08), so `auto` now designs like
+`always`. Promote to an accepted AD. **Viewpoint:** Decision. **Supersedes nothing;
+extends** AD-8/AD-9/AD-11/AD-15 (`05-decisions.md`).
 
 > This document is itself the "design output before code" that the proposal
 > advocates — written and reviewable *before* any implementation.
@@ -48,34 +52,43 @@ reasoning style.
 
 ```mermaid
 flowchart TD
-    req["requirement (text)"] --> tier{"complexity tier<br/>(trivial?)"}
-    tier -->|trivial| plan["Planner → Coder (current fast path)"]
-    tier -->|complex / design_mode=always| des["Designer (reasoner role)<br/>→ DesignSpec + TestPlan"]
-    des --> writet["write proposed tests into worktree<br/>(candidate oracle)"]
-    writet --> gate{"ApprovalPort<br/>human reviews design + tests"}
+    req["requirement (text)"] --> mode{"design.mode"}
+    mode -->|off| plan["Planner → Coder (fast path)"]
+    mode -->|auto / always| des["Designer (reasoner role)<br/>→ AD + Tech Spec per BC + TestPlan"]
+    des --> writet["write AD + Tech Specs + proposed tests<br/>into worktree (candidate oracle)"]
+    writet --> review["adversarial test review (advisory / strict)"]
+    review --> gate{"ApprovalPort<br/>architect reviews design + tests"}
     gate -->|reject| blocked["BLOCKED — design recorded for revision"]
     gate -->|approve| lock["lock tests (protected_globs)"]
-    lock --> code["Coder implements → verify (functional + arch) → heal"]
-    plan --> code
+    lock --> plan
+    plan --> code["Coder implements → verify (functional + arch) → heal"]
     code --> done["commit → deliver → deploy gate"]
 ```
+
+Design precedes the plan: the **approved** design is what the Planner decomposes into
+implementation tasks, so planning can never gate (or be skipped by) the design step.
 
 ## Extended session state machine
 
 ```mermaid
 stateDiagram-v2
     [*] --> PLANNING
-    PLANNING --> DESIGNING: design-first tier
-    PLANNING --> CODING: trivial / design disabled
+    PLANNING --> DESIGNING: design enabled (before plan)
+    PLANNING --> CODING: design off, plan ready
     DESIGNING --> AWAITING_APPROVAL: DesignSpec + TestPlan ready
-    AWAITING_APPROVAL --> CODING: approved (tests locked as oracle)
+    AWAITING_APPROVAL --> PLANNING: approved → decompose design into tasks
     AWAITING_APPROVAL --> BLOCKED: rejected
+    PLANNING --> BLOCKED: empty plan
     CODING --> VERIFYING
     VERIFYING --> DONE
     VERIFYING --> HEALING
     HEALING --> CODING
     HEALING --> HEALING_FAILED
 ```
+
+The saga briefly re-enters `PLANNING`: `INIT → PLANNING → DESIGNING → AWAITING_APPROVAL
+→ PLANNING (resume_planning, decompose the approved design) → CODING`. When design is
+`off`, it stays in the original `PLANNING → CODING` path.
 
 ## What it reuses (low marginal cost)
 
@@ -133,13 +146,15 @@ stateDiagram-v2
    = 1 Tech Spec**) — committed with the change; the architect reviews these at the
    gate. Docs + locked tests are recorded in the cumulative `applied` set so a
    reset-to-clean heal cannot wipe them. (`profile.design.docs_dir`, default `docs/design`.)
-3. **Slice 3 — Tiering + config — ✅ DONE.** `design.mode = off | auto | always`.
-   `auto` designs only **complex** changes (the deterministic heuristic `_is_complex`:
-   more than one task OR more than one touched file — single-file/single-task changes
-   skip design and log `DESIGN_SKIPPED`, since the Coder reliably one-shots those);
-   `always` bypasses the heuristic; `off` is the fast path. No extra LLM call — the
-   decision is derived from the plan already in hand. Unit-tested (auto-skips-trivial,
-   auto-designs-complex, always-overrides).
+3. **Slice 3 — Config + tiering — ✅ DONE, then revised by the reorder.** `design.mode
+   = off | auto | always`. `off` is the fast path (no design). Originally `auto` designed
+   only **complex** changes via a deterministic `_is_complex` heuristic (more than one
+   task OR touched file) — but that read the plan, and the **pipeline reorder moved design
+   ahead of the plan**, so there is no plan to tier on at design time. `_is_complex` and
+   the `DESIGN_SKIPPED` branch were **removed**; `auto` now designs like `always`.
+   Plan-free tiering (cheap signals: requirement length, file-count estimate, or the
+   future **Analysis** phase's ambiguity verdict) is deferred to ADR-08. Unit-tested
+   (`auto` designs when enabled; `always` designs; `off` skips).
 4. **Slice 4 — Adversarial test review — ✅ DONE.** A `ReviewPort` + `LLMReviewer`
    (the `reviewer` role, ideally a DIFFERENT model from the Designer) critiques the
    proposed TestPlan before locking: trivially-satisfiable? missing edge cases?
