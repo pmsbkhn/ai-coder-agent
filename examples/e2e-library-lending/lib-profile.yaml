@@ -1,0 +1,29 @@
+name: library-domain
+language: java
+
+target:
+  repo_path: "/tmp/e2e-library"        # overridden by AICODER_REPO_PATH anyway
+  sandbox_module: ""
+
+build:
+  mcp_server: maven-server
+  test_command: "mvn test"
+  result_parser: surefire-xml
+  reports_glob: "**/target/surefire-reports/*.xml"
+
+architecture:
+  fitness: none                        # framework-free greenfield; no ArchUnit gate
+
+healing:
+  max_attempts: 8
+  reset_to_clean: true
+  no_progress_breaker: true
+
+design:
+  mode: always
+  review_strict: false                 # advisory review; architect gate approves
+
+# Design-proposed tests are the immutable oracle: agent writes+locks them, then
+# implements production code to pass them and may not edit them.
+protected_globs:
+  - "*src/test/*"
