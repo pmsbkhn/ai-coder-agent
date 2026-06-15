@@ -13,7 +13,7 @@ from __future__ import annotations
 from aicoder.adapters.llm.base import LLMClient
 from aicoder.adapters.llm.structured import generate_structured
 from aicoder.application.profile import ProjectProfile
-from aicoder.domain.models import DesignSpec
+from aicoder.domain.models import AnalysisSpec, DesignSpec
 
 _SYSTEM = """You are the Designer of an autonomous coding agent on an MSFW project
 (Java 21 / Spring Boot 4, strict Hexagonal / Ports & Adapters, DDD).
@@ -41,7 +41,26 @@ Each tech_spec (one bounded context):
 
 Design the smallest change that satisfies the requirement; do not over-engineer.
 Do not split one cohesive context into several tech specs.
+
+When an ANALYSIS section is provided (the upstream Analyst already pinned down WHAT
+to build), treat its acceptance criteria as the binding contract: every criterion
+MUST be covered by at least one proposed test, and your design must honor the stated
+assumptions. Do not contradict or silently widen the analyzed scope.
 """
+
+
+def _format_analysis(analysis: AnalysisSpec) -> str:
+    """Render the upstream AnalysisSpec as a prompt section so the proposed tests
+    trace to the explicit, human-visible acceptance criteria (ADR-08 Slice 3)."""
+    def _lines(items: list[str]) -> str:
+        return "\n".join(f"- {i}" for i in items) if items else "- (none)"
+    return (
+        f"\n\n# Analysis (already approved — design MUST satisfy this)\n"
+        f"Restatement: {analysis.restatement}\n\n"
+        f"Assumptions (honor these):\n{_lines(analysis.assumptions)}\n\n"
+        f"Acceptance criteria (each MUST be covered by a proposed test):\n"
+        f"{_lines(analysis.acceptance_criteria)}"
+    )
 
 
 class LLMDesigner:
@@ -52,12 +71,16 @@ class LLMDesigner:
         self._profile = profile
         self._cap = max_repo_map_chars
 
-    def propose_design(self, requirement: str, repo_map: str) -> DesignSpec:
+    def propose_design(
+        self, requirement: str, repo_map: str, analysis: AnalysisSpec | None = None
+    ) -> DesignSpec:
         user = (
             f"# Requirement\n{requirement}\n\n"
             f"# Repo Map (skeleton — request full symbols later via zoom-in)\n"
             f"{repo_map[: self._cap]}"
         )
+        if analysis is not None:
+            user += _format_analysis(analysis)
         return generate_structured(
             self._client, system=_SYSTEM, user=user, model_cls=DesignSpec, retries=1
         )

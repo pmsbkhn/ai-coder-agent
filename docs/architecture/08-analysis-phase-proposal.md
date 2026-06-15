@@ -1,10 +1,11 @@
 # 08 — Proposal / ADR: Explicit Analysis (Requirement-Clarification) Phase
 
-**Status:** **Slices 1+2 IMPLEMENTED** (Analyst role + AnalysisSpec, run before
-design; clarification gate on ambiguous requirements). Slice 3 (analysis→design
-hand-off) and Slice 4 (tiering) remain proposed. **Viewpoint:** Decision.
-**Complements** ADR-07 (`07-design-first-proposal.md`): ADR-07 made *design* (HOW)
-explicit; this makes *analysis* (WHAT) explicit, one phase earlier.
+**Status:** **Slices 1+2+3 IMPLEMENTED** (Analyst role + AnalysisSpec, run before
+design; clarification gate on ambiguous requirements; analysis→design hand-off so the
+proposed tests trace to the analyzed acceptance criteria). Slice 4 (tiering) remains
+proposed. **Viewpoint:** Decision. **Complements** ADR-07
+(`07-design-first-proposal.md`): ADR-07 made *design* (HOW) explicit; this makes
+*analysis* (WHAT) explicit, one phase earlier, and feeds it forward.
 
 > Like ADR-07, this document is itself the design-before-code artifact it advocates.
 
@@ -115,7 +116,16 @@ stateDiagram-v2
    With NO approval port wired the phase is audit-only (logs `NEEDS_CLARIFICATION`,
    proceeds on assumptions). Unit-tested (clear→proceed, ambiguous+deny→BLOCKED before
    coding, ambiguous+approve→proceed, advisory-without-gate, analysis-before-design).
-3. **Slice 3 — Analysis → Design hand-off (proposed):** pass `acceptance_criteria` into the Designer so proposed tests trace to explicit criteria; log the linkage. (Today analysis is audit + gate only; the Designer does not yet consume the AnalysisSpec.)
+3. **Slice 3 — Analysis → Design hand-off — ✅ DONE.** `DesignPort.propose_design`
+   gained an optional `analysis: AnalysisSpec`; the Orchestrator threads the approved
+   AnalysisSpec from `_run_analysis` into `_run_design`. `LLMDesigner` renders the
+   restatement + assumptions + acceptance criteria into its prompt as a binding
+   contract ("every criterion MUST be covered by a proposed test; honor the
+   assumptions; do not widen scope"). The linkage is auditable via a `DESIGN_TRACE`
+   event (acceptance criteria → proposed test paths). Unit-tested (`test_analyst.py`:
+   criteria reach the Designer + trace logged; no trace when analysis is off). Proven
+   e2e on gpt-oss:120b: the `note` requirement's 6 acceptance criteria mapped onto 3
+   proposed tests (OrderTest / OrderPlacedTest / OrderServiceTest) covering each.
 4. **Slice 4 (optional) — tiering:** the plan-free complexity tiering removed from ADR-07 lands here (cheap signals / the ambiguity verdict), and/or fold analysis+design into one gate when both are on.
 
 **Acceptance (e2e on the eval target):** an under-specified requirement produces an

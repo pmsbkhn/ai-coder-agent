@@ -34,7 +34,7 @@ from aicoder.application.ports.outbound import (
 from aicoder.application.design_docs import ad_path, render_ad, render_tech_spec, tech_spec_path
 from aicoder.application.profile import ProjectProfile
 from aicoder.domain.errors import ToolInvocationError
-from aicoder.domain.models import ExecutionTrace, SessionState, Task, ToolRequest
+from aicoder.domain.models import AnalysisSpec, ExecutionTrace, SessionState, Task, ToolRequest
 from aicoder.domain.session import AgentSession
 
 
@@ -127,13 +127,16 @@ class Orchestrator:
 
         # ---- ANALYZE: restate a prose requirement + surface ambiguity. A genuinely
         # ambiguous requirement blocks on the human clarification gate (ADR-08). ----
-        if not self._run_analysis(session, prompt, repo_map):
+        analysis, proceed = self._run_analysis(session, prompt, repo_map)
+        if not proceed:
             self._memory.save_session(session)
             return session
 
         # ---- DESIGN: write the AD + one Tech Spec per bounded context and (if gated)
-        # lock the architect-approved tests as the oracle the Coder must satisfy. ----
-        locked, proceed = self._run_design(session, prompt, repo_map, workdir, applied)
+        # lock the architect-approved tests as the oracle the Coder must satisfy. The
+        # approved analysis (if any) is handed to the Designer so the proposed tests
+        # trace to its explicit acceptance criteria (ADR-08 Slice 3). ----
+        locked, proceed = self._run_design(session, prompt, repo_map, workdir, applied, analysis)
         if not proceed:
             self._memory.save_session(session)
             return session
@@ -185,20 +188,24 @@ class Orchestrator:
         self._memory.save_session(session)
         return session
 
-    def _run_analysis(self, session: AgentSession, prompt: str, repo_map: str) -> bool:
-        """ADR-08 analysis phase — runs BEFORE design. Returns `proceed`.
+    def _run_analysis(
+        self, session: AgentSession, prompt: str, repo_map: str
+    ) -> tuple[AnalysisSpec | None, bool]:
+        """ADR-08 analysis phase — runs BEFORE design. Returns (analysis, proceed);
+        `analysis` is handed to the Designer (Slice 3) so its tests trace to the
+        explicit acceptance criteria. None when analysis is off.
 
-        - analysis off / no analyst → True (straight to design): unchanged fast path.
+        - analysis off / no analyst → (None, True): unchanged fast path.
         - analyst runs → restate the prose requirement + surface assumptions / open
           questions / acceptance criteria; log ANALYSIS_DONE (auditable).
-        - NOT ambiguous → resume PLANNING, True.
+        - NOT ambiguous → resume PLANNING, (spec, True).
         - ambiguous + no approval port → audit-only: log NEEDS_CLARIFICATION, proceed
-          on the analyst's assumptions (True). (A gate requires an ApprovalPort.)
+          on the analyst's assumptions (spec, True). (A gate requires an ApprovalPort.)
         - ambiguous + approval → clarification gate (deny-by-default): approve →
-          proceed on assumptions (True); deny → BLOCKED (False).
+          (spec, True); deny → BLOCKED (spec, False).
         """
         if self._analyst is None or self._analysis_mode == "off":
-            return True
+            return None, True
 
         session.start_analyzing()  # PLANNING -> ANALYZING
         spec = self._analyst.analyze(prompt, repo_map)
@@ -211,26 +218,26 @@ class Orchestrator:
         })
         if not spec.ambiguous:
             session.resume_planning()  # ANALYZING -> PLANNING
-            return True
+            return spec, True
 
         session.await_clarification()  # ANALYZING -> AWAITING_CLARIFICATION
         self._log(session, "NEEDS_CLARIFICATION", {"open_questions": spec.open_questions[:10]})
         if self._approval is None:
             session.resume_planning()  # no gate wired → audit-only, proceed on assumptions
-            return True
+            return spec, True
         summary = (f"clarify {len(spec.open_questions)} open question(s) before building — "
                    f"proceed on the analyst's assumptions?")
         if self._approval.request_approval("clarification", summary):
             self._log(session, "CLARIFICATION_PROCEED", {"assumptions": spec.assumptions[:10]})
             session.resume_planning()  # AWAITING_CLARIFICATION -> PLANNING
-            return True
+            return spec, True
         session.transition_to(SessionState.BLOCKED)  # AWAITING_CLARIFICATION -> BLOCKED
         self._log(session, "CLARIFICATION_REQUIRED", {"open_questions": spec.open_questions[:10]})
-        return False
+        return spec, False
 
     def _run_design(
         self, session: AgentSession, prompt: str, repo_map: str, workdir: str,
-        applied: dict[str, str],
+        applied: dict[str, str], analysis: AnalysisSpec | None = None,
     ) -> tuple[set[str], bool]:
         """M07 design-first — runs BEFORE planning. Returns (locked_test_paths, proceed).
 
@@ -240,14 +247,23 @@ class Orchestrator:
           gate on the ARCHITECT; on approve LOCK them as the oracle ([paths], True) and
           resume PLANNING; on reject → BLOCKED ([], False).
 
+        `analysis` (ADR-08 Slice 3) carries the approved acceptance criteria forward so
+        the proposed tests trace to them, instead of the Designer re-deriving "done".
+
         (Complexity tiering used to live here keyed on the plan; with design moved
-        ahead of the plan that signal is gone — tiering belongs to the future Analysis
+        ahead of the plan that signal is gone — tiering belongs to the Analysis
         phase, ADR-08. `auto` therefore designs like `always` for now.)
         """
         if self._designer is None or self._design_mode == "off":
             return set(), True
 
-        spec = self._designer.propose_design(prompt, repo_map)
+        spec = self._designer.propose_design(prompt, repo_map, analysis)
+        if analysis is not None:
+            self._log(session, "DESIGN_TRACE", {
+                "from": "analysis",
+                "acceptance_criteria": analysis.acceptance_criteria[:10],
+                "proposed_tests": [t.path for t in spec.all_tests()],
+            })
         # Materialize the explicit design artifacts: one umbrella AD + one Tech Spec
         # per bounded context (1 BC = 1 Tech Spec), written into the worktree so they
         # are reviewable and commit alongside the change.

@@ -63,7 +63,13 @@ class DesignPort(Protocol):
     DesignSpec — affected components, interface changes, and executable proposed
     tests — BEFORE coding. Runs on the reasoner role (stateless reasoning)."""
 
-    def propose_design(self, requirement: str, repo_map: str) -> DesignSpec:
+    def propose_design(
+        self, requirement: str, repo_map: str, analysis: AnalysisSpec | None = None
+    ) -> DesignSpec:
+        """`analysis` is the upstream AnalysisSpec (ADR-08) when the analysis phase
+        ran: its acceptance criteria + assumptions are handed to the Designer so the
+        proposed tests trace to explicit, human-visible criteria instead of the
+        Designer re-deriving "done" from the raw prose. None when analysis is off."""
         ...
 
 
