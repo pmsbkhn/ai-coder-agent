@@ -18,9 +18,11 @@ from aicoder.domain.models import Plan, SessionState
 _ALLOWED: dict[SessionState, set[SessionState]] = {
     SessionState.INIT: {SessionState.PLANNING},
     # PLANNING -> DESIGNING (design-first) | CODING (fast path) | BLOCKED (empty plan)
+    # Design-first runs BEFORE planning: PLANNING -> DESIGNING -> AWAITING_APPROVAL,
+    # then (approved) back to PLANNING to decompose the approved design into tasks.
     SessionState.PLANNING: {SessionState.CODING, SessionState.BLOCKED, SessionState.DESIGNING},
     SessionState.DESIGNING: {SessionState.AWAITING_APPROVAL, SessionState.BLOCKED},
-    SessionState.AWAITING_APPROVAL: {SessionState.CODING, SessionState.BLOCKED},
+    SessionState.AWAITING_APPROVAL: {SessionState.PLANNING, SessionState.BLOCKED},
     SessionState.CODING: {SessionState.VERIFYING},
     # VERIFYING -> CODING advances to the next sub-task (multi-task plans).
     SessionState.VERIFYING: {SessionState.DONE, SessionState.HEALING, SessionState.CODING},
@@ -61,6 +63,10 @@ class AgentSession(BaseModel):
     def await_approval(self) -> None:
         """Design produced; block on the human gate."""
         self.transition_to(SessionState.AWAITING_APPROVAL)
+
+    def resume_planning(self) -> None:
+        """Architect approved the design → decompose it into tasks (plan)."""
+        self.transition_to(SessionState.PLANNING)
 
     def reject_design(self) -> None:
         """Human rejected the design at the gate → escalate (terminal)."""

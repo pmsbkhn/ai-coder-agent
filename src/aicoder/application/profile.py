@@ -46,9 +46,10 @@ class HealingConfig(BaseModel):
 
 
 class DesignConfig(BaseModel):
-    # Design-first phase (M07). "off" = current fast path (default); "always" =
-    # run the Designer for every requirement; "auto" = only for non-trivial changes
-    # (>1 task or >1 file).
+    # Design-first phase (M07), runs BEFORE planning. "off" = fast path, no design
+    # (default); "always" / "auto" = run the Designer for every requirement. ("auto"
+    # used to tier on the plan, but design now precedes the plan, so it behaves like
+    # "always"; plan-free tiering is deferred to the Analysis phase, ADR-08.)
     mode: str = "off"
     # Slice 4: when true, a failed adversarial test review auto-blocks the run
     # (before the human gate). Default false = advisory (concerns surfaced to the human).

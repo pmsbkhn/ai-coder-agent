@@ -97,21 +97,14 @@ class Orchestrator:
         )
         self._log(session, "SESSION_CREATED", {"prompt": prompt})
 
-        # ---- PLANNING (skeleton-first: TC-CORE-03) ----
+        # Design-first ordering (M07): the pipeline is
+        #   ANALYZE(future) -> DESIGN(AD+TechSpecs) -> [architect gate] -> PLAN -> CODE.
+        # Design runs BEFORE planning — a plan is the implementer's decomposition, not
+        # a gate before design (a flaky/empty plan must never block the design).
         session.start_planning()
         repo_map = self._fetch_repo_map()
-        plan = self._planner.generate_plan(prompt, repo_map)
-        session.set_plan(plan)
-        self._log(session, "PLAN_CREATED", {"tasks": [t.id for t in plan.tasks]})
-        self._memory.save_session(session)
 
-        if plan.is_empty:
-            session.transition_to(SessionState.BLOCKED)
-            self._log(session, "EMPTY_PLAN", {})
-            self._memory.save_session(session)
-            return session
-
-        # ---- workspace (isolated worktree) ----
+        # ---- workspace (isolated worktree, needed to write the design artifacts) ----
         branch = f"feature/{session_id}"
         ws = self._tool("git", "start_task", branch=branch)
         workdir = ws.get("worktree") or self._profile.target.repo_path
@@ -121,10 +114,21 @@ class Orchestrator:
         # written below, which are otherwise untracked and wiped by `git clean -fd`.
         applied: dict[str, str] = {}
 
-        # ---- design-first (M07): write the AD + Tech Spec files and (if gated) lock
-        # the approved tests as the oracle the Coder must satisfy. ----
-        locked, proceed = self._run_design(session, prompt, repo_map, workdir, plan, applied)
+        # ---- DESIGN: write the AD + one Tech Spec per bounded context and (if gated)
+        # lock the architect-approved tests as the oracle the Coder must satisfy. ----
+        locked, proceed = self._run_design(session, prompt, repo_map, workdir, applied)
         if not proceed:
+            self._memory.save_session(session)
+            return session
+
+        # ---- PLAN: now decompose the (approved) work into implementation tasks. ----
+        plan = self._planner.generate_plan(prompt, repo_map)
+        session.set_plan(plan)
+        self._log(session, "PLAN_CREATED", {"tasks": [t.id for t in plan.tasks]})
+        self._memory.save_session(session)
+        if plan.is_empty:
+            session.transition_to(SessionState.BLOCKED)
+            self._log(session, "EMPTY_PLAN", {})
             self._memory.save_session(session)
             return session
 
@@ -140,7 +144,7 @@ class Orchestrator:
         all_targets = _unique(
             [f for task in plan.tasks for f in task.target_files] + protected
         )
-        session.start_coding()  # PLANNING/AWAITING_APPROVAL -> CODING
+        session.start_coding()  # PLANNING -> CODING
         for task in plan.tasks:
             files = self._read_files(workdir, all_targets)
             change = self._coder.apply_task(task, files)
@@ -164,30 +168,23 @@ class Orchestrator:
         self._memory.save_session(session)
         return session
 
-    def _is_complex(self, plan: Plan) -> bool:
-        """Tiering heuristic (Slice 3): a change is 'complex enough to design' when it
-        spans more than one task or touches more than one file. Single-file,
-        single-task changes are where the Coder reliably one-shots (empirically), so
-        they skip design. Deterministic, derived from the plan we already have."""
-        unique_files = {f for t in plan.tasks for f in t.target_files}
-        return len(plan.tasks) > 1 or len(unique_files) > 1
-
     def _run_design(
-        self, session: AgentSession, prompt: str, repo_map: str, workdir: str, plan: Plan,
+        self, session: AgentSession, prompt: str, repo_map: str, workdir: str,
         applied: dict[str, str],
     ) -> tuple[set[str], bool]:
-        """M07 design-first. Returns (locked_test_paths, proceed).
+        """M07 design-first — runs BEFORE planning. Returns (locked_test_paths, proceed).
 
-        - design off / no designer → ([], True): current fast path.
-        - mode "auto" + trivial change → skip (DESIGN_SKIPPED), ([], True).
-        - designer but NO approval port → produce + log only (Slice 1), ([], True).
-        - designer + approval (Slice 2) → write the proposed tests, gate on a human;
-          on approve, LOCK them as the oracle ([paths], True); on reject → BLOCKED ([], False).
+        - design off / no designer → ([], True): straight to planning (fast path).
+        - designer but NO approval port → produce AD+TechSpecs + log only ([], True).
+        - designer + approval → write the proposed tests, (adversarial review,) then
+          gate on the ARCHITECT; on approve LOCK them as the oracle ([paths], True) and
+          resume PLANNING; on reject → BLOCKED ([], False).
+
+        (Complexity tiering used to live here keyed on the plan; with design moved
+        ahead of the plan that signal is gone — tiering belongs to the future Analysis
+        phase, ADR-08. `auto` therefore designs like `always` for now.)
         """
         if self._designer is None or self._design_mode == "off":
-            return set(), True
-        if self._design_mode == "auto" and not self._is_complex(plan):
-            self._log(session, "DESIGN_SKIPPED", {"reason": "trivial: single task, single file"})
             return set(), True
 
         spec = self._designer.propose_design(prompt, repo_map)
@@ -235,7 +232,8 @@ class Orchestrator:
                    + (f"; {len(concerns)} review concern(s)" if concerns else ""))
         if self._approval.request_approval("design", summary):
             self._log(session, "DESIGN_APPROVED", {"docs": docs, "locked_tests": sorted(locked)})
-            return locked, True  # session left in AWAITING_APPROVAL; start_coding advances it
+            session.resume_planning()  # AWAITING_APPROVAL -> PLANNING (decompose the design)
+            return locked, True
         session.reject_design()  # AWAITING_APPROVAL -> BLOCKED
         self._log(session, "DESIGN_REJECTED", {})
         return set(), False
