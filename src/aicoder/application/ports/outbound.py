@@ -10,6 +10,7 @@ from __future__ import annotations
 from typing import Protocol, runtime_checkable
 
 from aicoder.domain.models import (
+    AnalysisSpec,
     CodeChange,
     DesignSpec,
     ExecutionTrace,
@@ -42,6 +43,17 @@ class PlannerPort(Protocol):
         Coder escape the fixpoint where the same prompt yields the same broken
         output forever. Returns guidance text, not code.
         """
+        ...
+
+
+@runtime_checkable
+class AnalysisPort(Protocol):
+    """Analysis phase (ADR-08): turn a prose business requirement that is not yet
+    broken into clear use cases into an explicit AnalysisSpec — restatement,
+    assumptions, open questions, acceptance criteria, and an ambiguity verdict —
+    BEFORE design. Runs on the reasoner role (stateless reasoning)."""
+
+    def analyze(self, requirement: str, repo_map: str) -> AnalysisSpec:
         ...
 
 
@@ -110,8 +122,8 @@ class ApprovalPort(Protocol):
     explicit human (or explicitly-configured) go-ahead."""
 
     def request_approval(self, kind: str, summary: str) -> bool:
-        """Gate an action of the given `kind` ("design" | "deploy"). Return True to
-        proceed, False to hold. Implementations deny by default."""
+        """Gate an action of the given `kind` ("clarification" | "design" | "deploy").
+        Return True to proceed, False to hold. Implementations deny by default."""
         ...
 
 

@@ -45,6 +45,14 @@ class HealingConfig(BaseModel):
     no_progress_breaker: bool = True
 
 
+class AnalysisConfig(BaseModel):
+    # Analysis phase (ADR-08), runs BEFORE design. "off" = fast path, no analysis
+    # (default); "always" / "auto" = run the Analyst for every requirement. When the
+    # Analyst flags a requirement as genuinely ambiguous, the run blocks on the
+    # clarification gate (ApprovalPort kind="clarification") unless approved.
+    mode: str = "off"
+
+
 class DesignConfig(BaseModel):
     # Design-first phase (M07), runs BEFORE planning. "off" = fast path, no design
     # (default); "always" / "auto" = run the Designer for every requirement. ("auto"
@@ -78,6 +86,7 @@ class ProjectProfile(BaseModel):
     architecture: ArchitectureConfig
     knowledge: KnowledgeConfig = Field(default_factory=KnowledgeConfig)
     healing: HealingConfig = Field(default_factory=HealingConfig)
+    analysis: AnalysisConfig = Field(default_factory=AnalysisConfig)
     design: DesignConfig = Field(default_factory=DesignConfig)
     deploy: DeployConfig = Field(default_factory=DeployConfig)
     # Repo-relative globs the agent may READ (they enter the Coder's context) but
