@@ -17,6 +17,7 @@ import os
 import sys
 from pathlib import Path
 
+from aicoder.adapters.analyst_llm import LLMAnalyst
 from aicoder.adapters.coder_llm import LLMCoder
 from aicoder.adapters.deploy import CommandDeploy
 from aicoder.adapters.designer_llm import LLMDesigner
@@ -49,10 +50,17 @@ def build_orchestrator(profile_path: str | Path) -> Orchestrator:
     # Slice 4: adversarial reviewer (a distinct role/model). Default reasoner;
     # set AICODER_REVIEWER_MODEL to a different model for true diversity.
     reviewer = LLMReviewer(build_llm_from_env(role="reviewer"), profile) if design_on else None
+    # ADR-08 analysis phase (before design). Opt-in via AICODER_ANALYSIS / profile;
+    # default off keeps the pipeline unchanged.
+    analysis_mode = os.environ.get("AICODER_ANALYSIS", profile.analysis.mode).lower()
+    analysis_on = analysis_mode in ("auto", "always")
+    analyst = LLMAnalyst(build_llm_from_env(role="analyst"), profile) if analysis_on else None
     return Orchestrator(
         profile=profile,
         planner=LLMPlanner(planner_llm, profile),
         coder=LLMCoder(coder_llm),
+        analyst=analyst,
+        analysis_mode=analysis_mode,
         designer=designer,
         design_mode=design_mode,
         reviewer=reviewer,

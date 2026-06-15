@@ -1,6 +1,8 @@
 # 08 — Proposal / ADR: Explicit Analysis (Requirement-Clarification) Phase
 
-**Status:** Proposed (not yet implemented). **Viewpoint:** Decision.
+**Status:** **Slices 1+2 IMPLEMENTED** (Analyst role + AnalysisSpec, run before
+design; clarification gate on ambiguous requirements). Slice 3 (analysis→design
+hand-off) and Slice 4 (tiering) remain proposed. **Viewpoint:** Decision.
 **Complements** ADR-07 (`07-design-first-proposal.md`): ADR-07 made *design* (HOW)
 explicit; this makes *analysis* (WHAT) explicit, one phase earlier.
 
@@ -100,10 +102,21 @@ stateDiagram-v2
 
 ## Phased implementation plan
 
-1. **Slice 1 — Analyst role + AnalysisSpec (no gate):** `AnalysisPort` + `LLMAnalyst`; run before planning when enabled; log `ANALYSIS_DONE`. Opt-in via `analysis.mode` (default off → unchanged). Unit-test with a fake analyst.
-2. **Slice 2 — Clarification gate:** state `ANALYZING` + `AWAITING_CLARIFICATION`; on `ambiguous`, gate via `ApprovalPort("clarification")` → proceed-on-assumptions or `BLOCKED` (log `NEEDS_CLARIFICATION` with the open questions). State tests.
-3. **Slice 3 — Analysis → Design hand-off:** pass `acceptance_criteria` into the Designer so proposed tests trace to explicit criteria; log the linkage.
-4. **Slice 4 (optional) — tiering** consistent with design (`auto`), and/or fold analysis+design into one gate when both are on.
+1. **Slice 1 — Analyst role + AnalysisSpec (no gate) — ✅ DONE.** `AnalysisPort` +
+   `LLMAnalyst` (analyst role); runs BEFORE design when enabled; logs `ANALYSIS_DONE`
+   (restatement / assumptions / open questions / acceptance criteria / ambiguity
+   verdict). Opt-in via `analysis.mode` (`off|auto|always`, default off → unchanged) or
+   `AICODER_ANALYSIS`. Unit-tested with a fake analyst (`tests/test_analyst.py`).
+2. **Slice 2 — Clarification gate — ✅ DONE.** New states `ANALYZING` /
+   `AWAITING_CLARIFICATION` (+ transitions; both hub through PLANNING). On `ambiguous`,
+   gate via `ApprovalPort.request_approval("clarification", …)` (deny-by-default;
+   `AICODER_CLARIFICATION_APPROVE=1` to proceed on the analyst's assumptions) →
+   `CLARIFICATION_PROCEED` + resume PLANNING, or `CLARIFICATION_REQUIRED` + `BLOCKED`.
+   With NO approval port wired the phase is audit-only (logs `NEEDS_CLARIFICATION`,
+   proceeds on assumptions). Unit-tested (clear→proceed, ambiguous+deny→BLOCKED before
+   coding, ambiguous+approve→proceed, advisory-without-gate, analysis-before-design).
+3. **Slice 3 — Analysis → Design hand-off (proposed):** pass `acceptance_criteria` into the Designer so proposed tests trace to explicit criteria; log the linkage. (Today analysis is audit + gate only; the Designer does not yet consume the AnalysisSpec.)
+4. **Slice 4 (optional) — tiering:** the plan-free complexity tiering removed from ADR-07 lands here (cheap signals / the ambiguity verdict), and/or fold analysis+design into one gate when both are on.
 
 **Acceptance (e2e on the eval target):** an under-specified requirement produces an
 AnalysisSpec with open questions → the agent blocks at the clarification gate (or

@@ -20,6 +20,7 @@ from fnmatch import fnmatch
 from pathlib import Path
 
 from aicoder.application.ports.outbound import (
+    AnalysisPort,
     ApprovalPort,
     BuildToolPort,
     CoderPort,
@@ -53,6 +54,8 @@ class Orchestrator:
         designer: DesignPort | None = None,
         design_mode: str = "off",
         reviewer: ReviewPort | None = None,
+        analyst: AnalysisPort | None = None,
+        analysis_mode: str = "off",
     ) -> None:
         self._profile = profile
         self._planner = planner
@@ -77,6 +80,12 @@ class Orchestrator:
         self._design_mode = design_mode
         # M07 Slice 4: adversarial reviewer of the proposed tests before locking.
         self._reviewer = reviewer
+        # ADR-08 analysis phase: when enabled, the Analyst restates a prose
+        # requirement + surfaces ambiguity BEFORE design; a genuinely ambiguous
+        # requirement blocks on the clarification gate. "off" (default) keeps the
+        # current behavior (straight to design/plan).
+        self._analyst = analyst
+        self._analysis_mode = analysis_mode
 
     # ------------------------------------------------------------------ #
     # Public entry point (RequirementPort)
@@ -97,10 +106,12 @@ class Orchestrator:
         )
         self._log(session, "SESSION_CREATED", {"prompt": prompt})
 
-        # Design-first ordering (M07): the pipeline is
-        #   ANALYZE(future) -> DESIGN(AD+TechSpecs) -> [architect gate] -> PLAN -> CODE.
-        # Design runs BEFORE planning — a plan is the implementer's decomposition, not
-        # a gate before design (a flaky/empty plan must never block the design).
+        # Pre-implementation ordering (ADR-08 + M07): the pipeline is
+        #   ANALYZE -> [clarification gate] -> DESIGN(AD+TechSpecs) -> [architect gate]
+        #   -> PLAN -> CODE.
+        # Both reasoning phases run BEFORE planning — a plan is the implementer's
+        # decomposition, not a gate before analysis/design (a flaky/empty plan must
+        # never block them).
         session.start_planning()
         repo_map = self._fetch_repo_map()
 
@@ -113,6 +124,12 @@ class Orchestrator:
         # heal (M3) restores everything — including the design docs + locked tests
         # written below, which are otherwise untracked and wiped by `git clean -fd`.
         applied: dict[str, str] = {}
+
+        # ---- ANALYZE: restate a prose requirement + surface ambiguity. A genuinely
+        # ambiguous requirement blocks on the human clarification gate (ADR-08). ----
+        if not self._run_analysis(session, prompt, repo_map):
+            self._memory.save_session(session)
+            return session
 
         # ---- DESIGN: write the AD + one Tech Spec per bounded context and (if gated)
         # lock the architect-approved tests as the oracle the Coder must satisfy. ----
@@ -167,6 +184,49 @@ class Orchestrator:
         self._log(session, "SESSION_DONE", {})
         self._memory.save_session(session)
         return session
+
+    def _run_analysis(self, session: AgentSession, prompt: str, repo_map: str) -> bool:
+        """ADR-08 analysis phase — runs BEFORE design. Returns `proceed`.
+
+        - analysis off / no analyst → True (straight to design): unchanged fast path.
+        - analyst runs → restate the prose requirement + surface assumptions / open
+          questions / acceptance criteria; log ANALYSIS_DONE (auditable).
+        - NOT ambiguous → resume PLANNING, True.
+        - ambiguous + no approval port → audit-only: log NEEDS_CLARIFICATION, proceed
+          on the analyst's assumptions (True). (A gate requires an ApprovalPort.)
+        - ambiguous + approval → clarification gate (deny-by-default): approve →
+          proceed on assumptions (True); deny → BLOCKED (False).
+        """
+        if self._analyst is None or self._analysis_mode == "off":
+            return True
+
+        session.start_analyzing()  # PLANNING -> ANALYZING
+        spec = self._analyst.analyze(prompt, repo_map)
+        self._log(session, "ANALYSIS_DONE", {
+            "restatement": spec.restatement[:500],
+            "assumptions": spec.assumptions[:10],
+            "open_questions": spec.open_questions[:10],
+            "acceptance_criteria": spec.acceptance_criteria[:10],
+            "ambiguous": spec.ambiguous,
+        })
+        if not spec.ambiguous:
+            session.resume_planning()  # ANALYZING -> PLANNING
+            return True
+
+        session.await_clarification()  # ANALYZING -> AWAITING_CLARIFICATION
+        self._log(session, "NEEDS_CLARIFICATION", {"open_questions": spec.open_questions[:10]})
+        if self._approval is None:
+            session.resume_planning()  # no gate wired → audit-only, proceed on assumptions
+            return True
+        summary = (f"clarify {len(spec.open_questions)} open question(s) before building — "
+                   f"proceed on the analyst's assumptions?")
+        if self._approval.request_approval("clarification", summary):
+            self._log(session, "CLARIFICATION_PROCEED", {"assumptions": spec.assumptions[:10]})
+            session.resume_planning()  # AWAITING_CLARIFICATION -> PLANNING
+            return True
+        session.transition_to(SessionState.BLOCKED)  # AWAITING_CLARIFICATION -> BLOCKED
+        self._log(session, "CLARIFICATION_REQUIRED", {"open_questions": spec.open_questions[:10]})
+        return False
 
     def _run_design(
         self, session: AgentSession, prompt: str, repo_map: str, workdir: str,

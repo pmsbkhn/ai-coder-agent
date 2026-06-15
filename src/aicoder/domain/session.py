@@ -17,10 +17,18 @@ from aicoder.domain.models import Plan, SessionState
 # Legal state transitions. Anything not listed here is rejected.
 _ALLOWED: dict[SessionState, set[SessionState]] = {
     SessionState.INIT: {SessionState.PLANNING},
-    # PLANNING -> DESIGNING (design-first) | CODING (fast path) | BLOCKED (empty plan)
-    # Design-first runs BEFORE planning: PLANNING -> DESIGNING -> AWAITING_APPROVAL,
-    # then (approved) back to PLANNING to decompose the approved design into tasks.
-    SessionState.PLANNING: {SessionState.CODING, SessionState.BLOCKED, SessionState.DESIGNING},
+    # The pre-implementation phases all hub through PLANNING (ADR-08 + ADR-07):
+    #   PLANNING -> ANALYZING -> (clear) PLANNING -> DESIGNING -> (approved) PLANNING -> CODING
+    # Analysis (ADR-08) runs first, then Design (ADR-07); a plan is decomposed only
+    # after both have passed their gates. PLANNING -> CODING is the design-off fast path.
+    SessionState.PLANNING: {
+        SessionState.CODING, SessionState.BLOCKED,
+        SessionState.ANALYZING, SessionState.DESIGNING,
+    },
+    SessionState.ANALYZING: {
+        SessionState.PLANNING, SessionState.AWAITING_CLARIFICATION, SessionState.BLOCKED,
+    },
+    SessionState.AWAITING_CLARIFICATION: {SessionState.PLANNING, SessionState.BLOCKED},
     SessionState.DESIGNING: {SessionState.AWAITING_APPROVAL, SessionState.BLOCKED},
     SessionState.AWAITING_APPROVAL: {SessionState.PLANNING, SessionState.BLOCKED},
     SessionState.CODING: {SessionState.VERIFYING},
@@ -55,6 +63,15 @@ class AgentSession(BaseModel):
     def start_planning(self) -> None:
         self.transition_to(SessionState.PLANNING)
 
+    # -- analysis (ADR-08) ---------------------------------------------------
+    def start_analyzing(self) -> None:
+        """Enter the analysis phase (restate a prose requirement, surface ambiguity)."""
+        self.transition_to(SessionState.ANALYZING)
+
+    def await_clarification(self) -> None:
+        """Analysis found genuine ambiguity → block on the human clarification gate."""
+        self.transition_to(SessionState.AWAITING_CLARIFICATION)
+
     # -- design-first (M07) --------------------------------------------------
     def start_designing(self) -> None:
         """Enter the design phase (produce DesignSpec + test plan)."""
@@ -65,7 +82,8 @@ class AgentSession(BaseModel):
         self.transition_to(SessionState.AWAITING_APPROVAL)
 
     def resume_planning(self) -> None:
-        """Architect approved the design → decompose it into tasks (plan)."""
+        """Return to PLANNING after a cleared pre-implementation gate: analysis came
+        back clear / clarified (ADR-08), or the architect approved the design (ADR-07)."""
         self.transition_to(SessionState.PLANNING)
 
     def reject_design(self) -> None:

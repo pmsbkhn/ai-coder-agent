@@ -17,6 +17,8 @@ class SessionState(str, Enum):
 
     INIT = "INIT"
     PLANNING = "PLANNING"
+    ANALYZING = "ANALYZING"              # ADR-08 analysis: restate prose req + surface ambiguity
+    AWAITING_CLARIFICATION = "AWAITING_CLARIFICATION"  # human gate on an ambiguous requirement
     DESIGNING = "DESIGNING"              # M07 design-first: producing the design + test plan
     AWAITING_APPROVAL = "AWAITING_APPROVAL"  # human gate on the design + proposed tests
     CODING = "CODING"
@@ -96,6 +98,21 @@ class DesignSpec(BaseModel):
 
     def all_tests(self) -> list[ProposedTest]:
         return [t for ts in self.tech_specs for t in ts.test_plan]
+
+
+class AnalysisSpec(BaseModel):
+    """The Analyst's output (ADR-08), produced BEFORE design from a prose business
+    requirement that has not yet been broken into clear use cases. It makes the
+    implicit explicit: a restatement (what the agent understood), the assumptions it
+    took, open questions / ambiguities, and the acceptance criteria the design + tests
+    must satisfy. `ambiguous` is the Analyst's verdict that it cannot responsibly
+    proceed without human clarification — it drives the clarification gate."""
+
+    restatement: str                                          # the requirement, in the agent's words
+    assumptions: list[str] = Field(default_factory=list)      # taken to fill gaps in the prose
+    open_questions: list[str] = Field(default_factory=list)   # genuine ambiguities for a human
+    acceptance_criteria: list[str] = Field(default_factory=list)  # observable "done" conditions
+    ambiguous: bool = False                                   # cannot proceed responsibly w/o clarification
 
 
 class TestReview(BaseModel):
