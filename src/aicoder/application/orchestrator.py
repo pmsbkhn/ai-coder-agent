@@ -31,7 +31,14 @@ from aicoder.application.ports.outbound import (
     PlannerPort,
     ReviewPort,
 )
-from aicoder.application.design_docs import ad_path, render_ad, render_tech_spec, tech_spec_path
+from aicoder.application.design_docs import (
+    ad_path,
+    render_ad,
+    render_tech_spec,
+    render_test_cases,
+    tech_spec_path,
+    test_cases_path,
+)
 from aicoder.application.profile import ProjectProfile
 from aicoder.application.tiering import estimate_complexity
 from aicoder.domain.errors import ToolInvocationError
@@ -279,7 +286,7 @@ class Orchestrator:
             self._log(session, "DESIGN_TRACE", {
                 "from": "analysis",
                 "acceptance_criteria": analysis.acceptance_criteria[:10],
-                "proposed_tests": [t.path for t in spec.all_tests()],
+                "proposed_tests": [t.path for t in spec.executable_tests()],
             })
         # Materialize the explicit design artifacts: one umbrella AD + one Tech Spec
         # per bounded context (1 BC = 1 Tech Spec), written into the worktree so they
@@ -289,7 +296,7 @@ class Orchestrator:
             "summary": spec.summary[:500],
             "bounded_contexts": spec.bounded_contexts,
             "docs": docs,
-            "proposed_tests": [t.path for t in spec.all_tests()],
+            "proposed_tests": [t.path for t in spec.executable_tests()],
         })
         if self._approval is None:
             return set(), True  # Slice-1 behavior: AD + Tech Specs written + logged, not gated
@@ -299,7 +306,8 @@ class Orchestrator:
         review = None
         if self._reviewer is not None:
             review = self._reviewer.review_tests(
-                prompt, spec.summary, [t.content for t in spec.all_tests()]
+                prompt, spec.summary,
+                [f"{t.id} [{t.title}] {t.spec}\n{t.content}".strip() for t in spec.all_tests()],
             )
             self._log(session, "TEST_REVIEW", {"ok": review.ok, "concerns": review.concerns[:10]})
             if not review.ok and self._profile.design.review_strict:
@@ -308,10 +316,11 @@ class Orchestrator:
                 session.transition_to(SessionState.BLOCKED)  # from PLANNING
                 return set(), False
 
-        # Write the proposed tests, then gate on the ARCHITECT before locking them.
+        # Write the executable proposed tests (spec-only fitness cases write no file),
+        # then gate on the ARCHITECT before locking them.
         session.start_designing()  # PLANNING -> DESIGNING
         locked: set[str] = set()
-        for t in spec.all_tests():
+        for t in spec.executable_tests():
             self._tool("git", "write_file", workdir=workdir, path=t.path, content=t.content)
             locked.add(t.path.replace("\\", "/"))
             applied[t.path.replace("\\", "/")] = t.content  # survive reset-to-clean
@@ -334,9 +343,9 @@ class Orchestrator:
     def _write_design_docs(
         self, workdir: str, spec, requirement: str, applied: dict[str, str]
     ) -> list[str]:
-        """Render + write the AD (umbrella) and one Tech Spec per bounded context.
-        Recorded in `applied` so a reset-to-clean heal restores them and they commit
-        with the change."""
+        """Render + write the AD (umbrella, SAD-style) and, per bounded context, one
+        Tech Spec + one Test Cases doc (1 BC = 1 Tech Spec). Recorded in `applied` so a
+        reset-to-clean heal restores them and they commit with the change."""
         docs_dir = self._profile.design.docs_dir
         paths: list[str] = []
 
@@ -347,7 +356,8 @@ class Orchestrator:
 
         _write(ad_path(docs_dir), render_ad(spec, requirement, docs_dir))
         for ts in spec.tech_specs:
-            _write(tech_spec_path(ts, docs_dir), render_tech_spec(ts))
+            _write(tech_spec_path(ts, docs_dir), render_tech_spec(ts, docs_dir))
+            _write(test_cases_path(ts, docs_dir), render_test_cases(ts, docs_dir))
         return paths
 
     def _maybe_deploy(self, session: AgentSession, workdir: str, prompt: str) -> None:

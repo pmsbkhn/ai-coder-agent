@@ -58,38 +58,64 @@ class Plan(BaseModel):
 
 
 class ProposedTest(BaseModel):
-    """An executable test the Designer proposes as part of the spec (M07 design-first).
+    """A test case the Designer proposes (M07 design-first), in the house TC-XXX-NN
+    style: an explicit domain-invariant / adapter / fitness specification PLUS the
+    executable test that encodes it.
 
-    `content` is whole test-file source; `path` is where it would live. Once a human
-    approves it (a later slice), it is written + locked via protected_globs and
-    becomes the oracle the Coder implements against."""
+    `spec` is the natural-language case (setup → action → assert, referencing
+    DomainException codes / invariants) — it renders into the Test Cases document.
+    `content` is the whole executable test-file source and `path` where it lives;
+    once the architect approves, it is written + locked via protected_globs and
+    becomes the oracle the Coder implements against. Fitness/architecture cases may
+    be spec-only (no executable content) — they document a rule enforced elsewhere."""
 
-    path: str
-    content: str
+    id: str = ""                                                 # e.g. "TC-PAY-01"
+    title: str = ""                                              # e.g. "Amount Cross-Check / Tampering"
+    kind: str = "domain"                                         # domain | adapter | fitness
+    spec: str = ""                                               # TC-style: setup → action → assert
+    path: str = ""                                               # executable test path (locked oracle)
+    content: str = ""                                            # executable JUnit source
     rationale: str = ""
 
 
 class TechSpec(BaseModel):
-    """The technical specification for ONE bounded context (1 BC = 1 Tech Spec).
-    Carries that context's delta: components touched, interface/contract changes,
-    rationale, and the executable acceptance tests for it."""
+    """The technical specification for ONE bounded context (1 BC = 1 Tech Spec),
+    following the org's detailed-design template (core design sections). Carries that
+    context's delta: requirements, static/runtime structure, domain model + invariants,
+    data model, decisions, and the acceptance test cases for it."""
 
     bounded_context: str                                         # the BC this spec governs
-    summary: str
+    summary: str                                                 # Context & Scope (what changes here)
+    classification: str = ""                                     # Tier + Data class (one line)
+    requirements_functional: list[str] = Field(default_factory=list)     # FR list
+    requirements_nonfunctional: list[str] = Field(default_factory=list)  # NFR / SLO list
+    module_view: str = ""                                        # static structure (mermaid or bullets)
+    cnc_view: str = ""                                           # runtime components + connectors
     affected: list[str] = Field(default_factory=list)            # components/files touched
-    interface_changes: list[str] = Field(default_factory=list)   # contract/interface deltas
-    adr_notes: str = ""                                          # short rationale / decisions
-    test_plan: list[ProposedTest] = Field(default_factory=list)
+    interface_changes: list[str] = Field(default_factory=list)   # contract/interface deltas (ports)
+    domain_model: str = ""                                       # aggregate/value objects (mermaid)
+    invariants: list[str] = Field(default_factory=list)          # domain invariants (guard clauses)
+    erd: str = ""                                                # data model (mermaid erDiagram / schema)
+    key_flows: str = ""                                          # sequence(s) for the main flow(s)
+    adrs: list[str] = Field(default_factory=list)                # ADR-style decisions (decision → why)
+    open_questions: list[str] = Field(default_factory=list)      # TBDs to resolve
+    adr_notes: str = ""                                          # short rationale (legacy/free notes)
+    test_plan: list[ProposedTest] = Field(default_factory=list)  # TC cases + executable oracle
 
 
 class DesignSpec(BaseModel):
     """The design output for one change — an umbrella **Architecture Description**
-    (system-level summary + cross-cutting decisions) plus one **Tech Spec per
-    bounded context** (1 BC = 1 Tech Spec). Materialized to files and reviewed by
-    an architect before coding."""
+    (system/SAD level: goals, architecture style, principles, bounded-context map,
+    cross-cutting decisions) plus one **Tech Spec per bounded context** (1 BC = 1
+    Tech Spec). Materialized to files and reviewed by an architect before coding."""
 
     summary: str                                                 # AD-level: the change across the system
+    goals: list[str] = Field(default_factory=list)               # objectives this change serves
+    architecture_style: str = ""                                 # style + rationale (e.g. hexagonal + events)
+    principles: list[str] = Field(default_factory=list)          # design principles upheld
+    context_map: str = ""                                        # bounded-context map (mermaid)
     decisions: list[str] = Field(default_factory=list)           # cross-cutting / integration decisions
+    nfr: list[str] = Field(default_factory=list)                 # system-level NFR / constraints
     tech_specs: list[TechSpec] = Field(default_factory=list)     # one per bounded context
 
     @property
@@ -98,6 +124,11 @@ class DesignSpec(BaseModel):
 
     def all_tests(self) -> list[ProposedTest]:
         return [t for ts in self.tech_specs for t in ts.test_plan]
+
+    def executable_tests(self) -> list[ProposedTest]:
+        """Only the cases with an executable file — those become the locked oracle.
+        Spec-only cases (e.g. fitness rules) document intent but write no test file."""
+        return [t for t in self.all_tests() if t.path and t.content]
 
 
 class AnalysisSpec(BaseModel):
