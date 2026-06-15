@@ -162,3 +162,27 @@ def test_analysis_runs_before_design() -> None:
     assert session.state is SessionState.DONE
     events = _events(mem, session.session_id)
     assert events.index("ANALYSIS_DONE") < events.index("DESIGN_PROPOSED")
+
+
+# --- Slice 3: analysis -> design hand-off (acceptance criteria reach the Designer) ---
+
+def test_acceptance_criteria_handed_to_designer() -> None:
+    mem, designer = InMemoryMemory(), FakeDesigner()
+    session = _orch(
+        "always", FakeAnalyst(_CLEAR), mem, designer=designer, design_mode="always",
+    ).run_requirement("x")
+    assert session.state is SessionState.DONE
+    # the Designer actually received the upstream AnalysisSpec...
+    assert designer.seen_analysis is not None
+    assert designer.seen_analysis.acceptance_criteria == _CLEAR["acceptance_criteria"]
+    # ...and the linkage is auditable.
+    trace = next(t for t in mem.get_traces(session.session_id) if t.event_type == "DESIGN_TRACE")
+    assert trace.payload["acceptance_criteria"] == _CLEAR["acceptance_criteria"]
+
+
+def test_no_design_trace_when_analysis_off() -> None:
+    mem, designer = InMemoryMemory(), FakeDesigner()
+    session = _orch("off", FakeAnalyst(_CLEAR), mem, designer=designer, design_mode="always").run_requirement("x")
+    assert session.state is SessionState.DONE
+    assert designer.seen_analysis is None                       # nothing to hand off
+    assert "DESIGN_TRACE" not in _events(mem, session.session_id)

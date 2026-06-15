@@ -56,9 +56,11 @@ class FakeDesigner:
     def __init__(self, design: dict | None = None) -> None:
         self.calls = 0
         self._design = design or _VALID_DESIGN
+        self.seen_analysis = None  # the AnalysisSpec handed in (ADR-08 Slice 3), if any
 
-    def propose_design(self, requirement: str, repo_map: str) -> DesignSpec:
+    def propose_design(self, requirement: str, repo_map: str, analysis=None) -> DesignSpec:
         self.calls += 1
+        self.seen_analysis = analysis
         return DesignSpec.model_validate(self._design)
 
 
