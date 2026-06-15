@@ -48,7 +48,8 @@ config), and **measurability** (objective eval).
 | 04 | [Behavioral views](04-behavioral-views.md) | Behavioral viewpoint — sequence diagrams of key flows (Mermaid sequenceDiagram) | control flow, heal loop, eval, sandbox, parallel, deploy gate |
 | 05 | [Architecture decisions](05-decisions.md) | Decision viewpoint — ADR-style records | rationale, trade-offs, locked choices |
 | 06 | [Status & roadmap](06-status-and-roadmap.md) | — | what exists, what's weak, what's next |
-| 07 | [Proposal: design-first phase](07-design-first-proposal.md) | Decision (Proposed) | making design + test cases explicit, human-gated outputs |
+| 07 | [Proposal: design-first phase](07-design-first-proposal.md) | Decision (Implemented) | making design + test cases explicit, human-gated outputs |
+| 08 | [Proposal: analysis phase](08-analysis-phase-proposal.md) | Decision (Proposed) | making requirement analysis + a clarification gate explicit |
 
 ## Correspondences & consistency rules (42010 §5.7)
 
