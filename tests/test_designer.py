@@ -286,7 +286,11 @@ def test_review_advisory_surfaces_concerns_then_human_approves() -> None:
 
 # --- Explicit AD + Tech Spec files (1 bounded context = 1 tech spec) ------------
 
-from aicoder.application.design_docs import render_ad, render_tech_spec  # noqa: E402
+from aicoder.application.design_docs import (  # noqa: E402
+    render_ad,
+    render_tech_spec,
+    render_test_cases,
+)
 
 _TWO_BC = {
     "summary": "Touch two contexts.",
@@ -340,3 +344,96 @@ def test_renderers_produce_ad_and_tech_spec_markdown() -> None:
     assert "# Architecture Description" in ad and "Orders" in ad and "techspec-orders.md" in ad
     ts = render_tech_spec(spec.tech_specs[0])
     assert "# Tech Spec — Orders" in ts and "OrderNoteTest.java" in ts
+
+
+# --- House style: SAD-style AD, core Tech Spec, TC-XXX-NN Test Cases ------------
+
+_RICH_DESIGN = {
+    "summary": "Add escrow capture to Payment.",
+    "goals": ["Protect buyer funds via escrow"],
+    "architecture_style": "Hexagonal per context; choreography via PaymentReceived.",
+    "principles": ["Idempotency for every money operation", "Tenant isolation"],
+    "context_map": "```mermaid\ngraph TD\n  PAY-->ORD\n```",
+    "decisions": ["One escrow per cart total."],
+    "nfr": ["Payment availability >= 99.95%"],
+    "tech_specs": [{
+        "bounded_context": "Payment",
+        "summary": "Escrow capture + settlement.",
+        "classification": "Tier 1 — Mission Critical · L3",
+        "requirements_functional": ["FR1 init escrow", "FR2 confirm payment"],
+        "requirements_nonfunctional": ["confirm P99 < 100ms"],
+        "module_view": "```mermaid\nflowchart TB\n  ctrl-->usecase-->domain\n```",
+        "cnc_view": "Payment API -> PostgreSQL (TLS · IAM)",
+        "affected": ["Payment.java", "EscrowHold.java"],
+        "interface_changes": ["interface PaymentPort { EscrowHold initEscrow(Money m) }"],
+        "domain_model": "```mermaid\nclassDiagram\n  class Payment\n```",
+        "invariants": [
+            "confirmPayment webhookAmount must equal escrow amount or DomainException(AMOUNT_MISMATCH)",
+            "PAID is terminal — markFailed() after PAID throws InvalidTransitionException",
+        ],
+        "erd": "```mermaid\nerDiagram\n  PAYMENT ||--o{ ESCROW_HOLD : has\n```",
+        "key_flows": "```mermaid\nsequenceDiagram\n  CHK->>PAY: InitEscrow\n```",
+        "adrs": ["One escrow per cart → buyer pays once → settlement splits later."],
+        "open_questions": ["Partial refund out of scope?"],
+        "test_plan": [
+            {"id": "TC-PAY-01", "title": "Amount Cross-Check / Tampering", "kind": "domain",
+             "spec": "Init Payment amount=1500000; confirmPayment(txn, webhookAmount=1000000) "
+                     "-> DomainException(AMOUNT_MISMATCH), state stays PENDING.",
+             "path": "src/test/java/com/example/payment/PaymentAmountTest.java",
+             "content": "class PaymentAmountTest {}", "rationale": "tampering guard"},
+            {"id": "TC-PAY-FIT-01", "title": "Domain purity", "kind": "fitness",
+             "spec": "domain package must not import application/adapter or Spring.",
+             "rationale": "ArchUnit rule"},
+        ],
+    }],
+}
+
+
+def test_ad_has_sad_style_sections() -> None:
+    ad = render_ad(DesignSpec.model_validate(_RICH_DESIGN), "escrow", "docs/design")
+    for section in ("## Goals", "## Architecture style", "## Design principles",
+                    "## Bounded-context map", "## Cross-cutting decisions"):
+        assert section in ad
+    assert "graph TD" in ad                                   # context map mermaid embedded
+    # the BC row links to BOTH the tech spec and the test-cases doc
+    assert "techspec-payment.md" in ad and "testcases-payment.md" in ad
+
+
+def test_tech_spec_has_core_sections_and_invariants() -> None:
+    ts = render_tech_spec(DesignSpec.model_validate(_RICH_DESIGN).tech_specs[0])
+    for section in ("1. Context & Scope", "Requirements — Functional", "Module view",
+                    "Invariants", "Data model", "Decisions", "Open questions"):
+        assert section in ts
+    assert "Tier 1 — Mission Critical" in ts                  # classification line
+    assert "AMOUNT_MISMATCH" in ts                            # invariant text rendered
+    assert "classDiagram" in ts and "erDiagram" in ts         # mermaid embedded
+
+
+def test_test_cases_doc_groups_by_kind() -> None:
+    tc = render_test_cases(DesignSpec.model_validate(_RICH_DESIGN).tech_specs[0])
+    assert "# Test Cases — Payment" in tc
+    assert "TC-PAY-01" in tc and "[Amount Cross-Check / Tampering]" in tc
+    assert "Domain invariant cases" in tc and "Fitness functions" in tc
+    assert "TC-PAY-FIT-01" in tc                              # spec-only fitness case listed
+    assert "PaymentAmountTest.java" in tc                     # domain case links its oracle
+
+
+def test_design_writes_testcases_doc_and_locks_only_executable() -> None:
+    mem = InMemoryMemory()
+    plan = Plan(tasks=[Task(id="t1", description="x", target_files=["A.java"])])
+    gw = _RecordingGateway()
+    orch = Orchestrator(
+        profile=_PROFILE, planner=FakePlanner(plan), coder=FakeCoder(),
+        memory=mem, gateway=gw, build=FakeBuild([_passed()]),
+        designer=FakeDesigner(_RICH_DESIGN), design_mode="always", approval=_Approval(True),
+    )
+    session = orch.run_requirement("x")
+    assert session.state is SessionState.DONE
+    # AD + Tech Spec + Test Cases doc all written
+    for doc in ("docs/design/AD.md", "docs/design/techspec-payment.md",
+                "docs/design/testcases-payment.md"):
+        assert doc in gw.writes
+    # only the executable (domain) case is locked; the spec-only fitness case is not
+    locked = next(t.payload["locked_tests"] for t in mem.get_traces(session.session_id)
+                  if t.event_type == "DESIGN_APPROVED")
+    assert locked == ["src/test/java/com/example/payment/PaymentAmountTest.java"]
