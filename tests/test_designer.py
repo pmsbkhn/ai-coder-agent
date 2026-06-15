@@ -167,13 +167,16 @@ def test_rejected_design_blocks_before_coding() -> None:
     assert coder.contexts == []             # Coder never called
 
 
-# --- Slice 3: tiering — auto designs complex changes, skips trivial ones --------
+# --- Slice 4: tiering — auto designs complex changes, skips trivial ones --------
+# Tiering is now plan-free (analysis/design run before the plan): it keys on the
+# REQUIREMENT text (scope + vagueness), not on task/file count. See test_tiering.py.
 
-_TRIVIAL = Plan(tasks=[Task(id="t1", description="x", target_files=["A.java"])])
-_COMPLEX = Plan(tasks=[Task(id="t1", description="x", target_files=["A.java", "B.java"])])
+_TRIVIAL_REQ = "Rename the field amount to total on Order."
+_COMPLEX_REQ = "Let customers manage their orders after placing them."   # "manage" → complex
 
 
-def _orch_with_plan(plan, design_mode, designer, mem):
+def _orch_auto(design_mode, designer, mem):
+    plan = Plan(tasks=[Task(id="t1", description="x", target_files=["A.java"])])
     return Orchestrator(
         profile=_PROFILE, planner=FakePlanner(plan), coder=FakeCoder(),
         memory=mem, gateway=FakeGateway(), build=FakeBuild([_passed()]),
@@ -181,21 +184,18 @@ def _orch_with_plan(plan, design_mode, designer, mem):
     )
 
 
-def test_auto_designs_when_enabled() -> None:
-    # Design now runs BEFORE planning, so there is no plan to tier on — `auto`
-    # designs like `always` (plan-based tiering was removed; tiering is deferred to
-    # the future Analysis phase). `off` is the fast path (test_design_skipped_by_default).
+def test_auto_skips_trivial_requirement() -> None:
     mem, designer = InMemoryMemory(), FakeDesigner()
-    session = _orch_with_plan(_TRIVIAL, "auto", designer, mem).run_requirement("x")
+    session = _orch_auto("auto", designer, mem).run_requirement(_TRIVIAL_REQ)
     assert session.state is SessionState.DONE
-    assert designer.calls == 1
+    assert designer.calls == 0
     events = [t.event_type for t in mem.get_traces(session.session_id)]
-    assert "DESIGN_PROPOSED" in events
+    assert "DESIGN_SKIPPED" in events and "DESIGN_PROPOSED" not in events
 
 
-def test_auto_designs_complex_change() -> None:
+def test_auto_designs_complex_requirement() -> None:
     mem, designer = InMemoryMemory(), FakeDesigner()
-    session = _orch_with_plan(_COMPLEX, "auto", designer, mem).run_requirement("x")
+    session = _orch_auto("auto", designer, mem).run_requirement(_COMPLEX_REQ)
     assert session.state is SessionState.DONE
     assert designer.calls == 1
     assert "DESIGN_PROPOSED" in [t.event_type for t in mem.get_traces(session.session_id)]
@@ -203,8 +203,8 @@ def test_auto_designs_complex_change() -> None:
 
 def test_always_designs_even_trivial() -> None:
     mem, designer = InMemoryMemory(), FakeDesigner()
-    _orch_with_plan(_TRIVIAL, "always", designer, mem).run_requirement("x")
-    assert designer.calls == 1   # 'always' designs every requirement
+    _orch_auto("always", designer, mem).run_requirement(_TRIVIAL_REQ)
+    assert designer.calls == 1   # 'always' ignores tiering and designs every requirement
 
 
 def test_design_runs_before_an_empty_plan_blocks() -> None:
@@ -212,14 +212,19 @@ def test_design_runs_before_an_empty_plan_blocks() -> None:
     # can no longer suppress the design. The run still BLOCKS on the empty plan, but
     # only AFTER the design was proposed (and, here, approved).
     mem = InMemoryMemory()
-    session = _orch_with_plan(Plan(tasks=[]), "always", FakeDesigner(), mem).run_requirement("x")
+    orch = Orchestrator(
+        profile=_PROFILE, planner=FakePlanner(Plan(tasks=[])), coder=FakeCoder(),
+        memory=mem, gateway=FakeGateway(), build=FakeBuild([_passed()]),
+        designer=FakeDesigner(), design_mode="always",
+    )
+    session = orch.run_requirement("x")
     assert session.state is SessionState.BLOCKED
     events = [t.event_type for t in mem.get_traces(session.session_id)]
     assert "DESIGN_PROPOSED" in events       # design happened first...
     assert events.index("DESIGN_PROPOSED") < events.index("EMPTY_PLAN")  # ...before the empty-plan block
 
 
-# --- Slice 4: adversarial test review before locking ---------------------------
+# --- ADR-07 Slice 4: adversarial test review before locking ---------------------
 
 # aliased so pytest doesn't try to collect the "Test"-prefixed domain model as a test
 from aicoder.domain.models import TestReview as _ReviewModel  # noqa: E402

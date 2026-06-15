@@ -33,6 +33,7 @@ from aicoder.application.ports.outbound import (
 )
 from aicoder.application.design_docs import ad_path, render_ad, render_tech_spec, tech_spec_path
 from aicoder.application.profile import ProjectProfile
+from aicoder.application.tiering import estimate_complexity
 from aicoder.domain.errors import ToolInvocationError
 from aicoder.domain.models import AnalysisSpec, ExecutionTrace, SessionState, Task, ToolRequest
 from aicoder.domain.session import AgentSession
@@ -125,9 +126,15 @@ class Orchestrator:
         # written below, which are otherwise untracked and wiped by `git clean -fd`.
         applied: dict[str, str] = {}
 
+        # ---- TIER: cheap, deterministic, plan-free complexity signal. `auto` mode
+        # uses it to skip the reasoning phases on clearly-trivial changes (Slice 4). ----
+        tiering = estimate_complexity(prompt)
+        if self._analysis_mode == "auto" or self._design_mode == "auto":
+            self._log(session, "TIERING", tiering.as_payload())
+
         # ---- ANALYZE: restate a prose requirement + surface ambiguity. A genuinely
         # ambiguous requirement blocks on the human clarification gate (ADR-08). ----
-        analysis, proceed = self._run_analysis(session, prompt, repo_map)
+        analysis, proceed = self._run_analysis(session, prompt, repo_map, tiering.is_complex)
         if not proceed:
             self._memory.save_session(session)
             return session
@@ -136,7 +143,9 @@ class Orchestrator:
         # lock the architect-approved tests as the oracle the Coder must satisfy. The
         # approved analysis (if any) is handed to the Designer so the proposed tests
         # trace to its explicit acceptance criteria (ADR-08 Slice 3). ----
-        locked, proceed = self._run_design(session, prompt, repo_map, workdir, applied, analysis)
+        locked, proceed = self._run_design(
+            session, prompt, repo_map, workdir, applied, analysis, tiering.is_complex
+        )
         if not proceed:
             self._memory.save_session(session)
             return session
@@ -189,13 +198,14 @@ class Orchestrator:
         return session
 
     def _run_analysis(
-        self, session: AgentSession, prompt: str, repo_map: str
+        self, session: AgentSession, prompt: str, repo_map: str, is_complex: bool
     ) -> tuple[AnalysisSpec | None, bool]:
         """ADR-08 analysis phase — runs BEFORE design. Returns (analysis, proceed);
         `analysis` is handed to the Designer (Slice 3) so its tests trace to the
-        explicit acceptance criteria. None when analysis is off.
+        explicit acceptance criteria. None when analysis is off / skipped.
 
         - analysis off / no analyst → (None, True): unchanged fast path.
+        - mode "auto" + trivial change → (None, True): skip (Slice 4 tiering).
         - analyst runs → restate the prose requirement + surface assumptions / open
           questions / acceptance criteria; log ANALYSIS_DONE (auditable).
         - NOT ambiguous → resume PLANNING, (spec, True).
@@ -205,6 +215,9 @@ class Orchestrator:
           (spec, True); deny → BLOCKED (spec, False).
         """
         if self._analyst is None or self._analysis_mode == "off":
+            return None, True
+        if self._analysis_mode == "auto" and not is_complex:
+            self._log(session, "ANALYSIS_SKIPPED", {"reason": "trivial change (auto tier)"})
             return None, True
 
         session.start_analyzing()  # PLANNING -> ANALYZING
@@ -238,10 +251,12 @@ class Orchestrator:
     def _run_design(
         self, session: AgentSession, prompt: str, repo_map: str, workdir: str,
         applied: dict[str, str], analysis: AnalysisSpec | None = None,
+        is_complex: bool = True,
     ) -> tuple[set[str], bool]:
         """M07 design-first — runs BEFORE planning. Returns (locked_test_paths, proceed).
 
         - design off / no designer → ([], True): straight to planning (fast path).
+        - mode "auto" + trivial change → ([], True): skip design (Slice 4 tiering).
         - designer but NO approval port → produce AD+TechSpecs + log only ([], True).
         - designer + approval → write the proposed tests, (adversarial review,) then
           gate on the ARCHITECT; on approve LOCK them as the oracle ([paths], True) and
@@ -249,12 +264,14 @@ class Orchestrator:
 
         `analysis` (ADR-08 Slice 3) carries the approved acceptance criteria forward so
         the proposed tests trace to them, instead of the Designer re-deriving "done".
-
-        (Complexity tiering used to live here keyed on the plan; with design moved
-        ahead of the plan that signal is gone — tiering belongs to the Analysis
-        phase, ADR-08. `auto` therefore designs like `always` for now.)
+        `is_complex` is the plan-free tiering signal (Slice 4); `auto` designs only
+        non-trivial changes, `always` ignores it (the default arg is True so callers
+        that don't tier always design).
         """
         if self._designer is None or self._design_mode == "off":
+            return set(), True
+        if self._design_mode == "auto" and not is_complex:
+            self._log(session, "DESIGN_SKIPPED", {"reason": "trivial change (auto tier)"})
             return set(), True
 
         spec = self._designer.propose_design(prompt, repo_map, analysis)

@@ -186,3 +186,27 @@ def test_no_design_trace_when_analysis_off() -> None:
     assert session.state is SessionState.DONE
     assert designer.seen_analysis is None                       # nothing to hand off
     assert "DESIGN_TRACE" not in _events(mem, session.session_id)
+
+
+# --- Slice 4: tiering — auto skips analysis on a trivial requirement ----------
+
+_TRIVIAL_REQ = "Rename the field amount to total on Order."
+_COMPLEX_REQ = "Let customers manage their orders after placing them."
+
+
+def test_auto_skips_analysis_on_trivial_requirement() -> None:
+    mem, analyst = InMemoryMemory(), FakeAnalyst(_CLEAR)
+    session = _orch("auto", analyst, mem).run_requirement(_TRIVIAL_REQ)
+    assert session.state is SessionState.DONE
+    assert analyst.calls == 0
+    events = _events(mem, session.session_id)
+    assert "ANALYSIS_SKIPPED" in events and "ANALYSIS_DONE" not in events
+    assert "TIERING" in events                                  # decision is auditable
+
+
+def test_auto_runs_analysis_on_complex_requirement() -> None:
+    mem, analyst = InMemoryMemory(), FakeAnalyst(_CLEAR)
+    session = _orch("auto", analyst, mem).run_requirement(_COMPLEX_REQ)
+    assert session.state is SessionState.DONE
+    assert analyst.calls == 1
+    assert "ANALYSIS_DONE" in _events(mem, session.session_id)
