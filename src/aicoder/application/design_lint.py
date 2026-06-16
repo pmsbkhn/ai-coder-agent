@@ -43,6 +43,11 @@ multi-context requirement:
   L7  context-map arrow drawn against the real dependency: the map draws ``A --> B``
       (A depends on B) but the only cross-context reference runs the other way (B uses a
       type owned by A) — the architecture diagram contradicts the ownership decisions.
+  L9  a shared kernel modeled as a peer bounded context — a Tech Spec named
+      ``SharedKernel`` / ``Common`` / ``Kernel`` holding only shared value objects and the
+      exception hierarchy. A shared kernel is a shared MODULE the contexts depend on, not a
+      context of its own; this also tends to produce inverted context-map arrows (caught by
+      L7's shared-kernel case, which fires even for a map-only node with no Tech Spec).
   L8  the locked test oracle invokes an operation (``bookRepo.findAllCopies()``,
       ``memberRepo.findAll()``) that NO interface / domain model / key-flow declares —
       the oracle out-runs the published API surface, so the Coder must invent an
@@ -181,6 +186,18 @@ def _referenced_types(ts: TechSpec) -> set[str]:
 def _context_slugs(spec: DesignSpec) -> dict[str, str]:
     """lowercased bounded-context name -> the canonical name, one per Tech Spec."""
     return {ts.bounded_context.lower(): ts.bounded_context for ts in spec.tech_specs}
+
+
+# Conventional names for a shared-kernel / common-types module — which is a shared MODULE
+# every context depends on, NOT a peer bounded context.
+_SHARED_KERNEL_NAMES = frozenset({
+    "sharedkernel", "shared", "common", "commons", "kernel", "sharedmodule",
+    "sharedtypes", "shareddomain",
+})
+
+
+def _is_shared_kernel(name: str) -> bool:
+    return re.sub(r"[\s_-]+", "", name).lower() in _SHARED_KERNEL_NAMES
 
 
 def _path_context(path: str, slugs: dict[str, str]) -> str | None:
@@ -331,12 +348,24 @@ def lint_design(spec: DesignSpec) -> list[str]:
     name_of = {slug: name for slug, name in slugs.items()}
     flagged_edges: set[tuple[str, str]] = set()
     for a_raw, b_raw in _MAP_EDGE.findall(spec.context_map):
-        a, b = name_of.get(a_raw.lower()), name_of.get(b_raw.lower())
-        if not a or not b or a == b or (a, b) in flagged_edges:
+        b = name_of.get(b_raw.lower())
+        # the source may be a map-only node that is not a declared context (e.g. a
+        # `Common` shared-kernel node), so fall back to its raw name.
+        a = name_of.get(a_raw.lower(), a_raw)
+        if not b or a == b or (a, b) in flagged_edges:
             continue
-        # arrow a->b reads "a depends on b"; flag only when the references run b->a and
-        # NOT a->b (an unambiguous inversion).
-        if (b, a) in ref_deps and (a, b) not in ref_deps:
+        # arrow a->b reads "a depends on b". Two unambiguous inversions:
+        #  (1) `a` is a shared kernel — everyone depends ON it, never the reverse;
+        #  (2) both are real contexts and the only cross-reference runs b->a (not a->b).
+        if _is_shared_kernel(a_raw):
+            flagged_edges.add((a, b))
+            issues.append(
+                f"L7 context-map draws `{a} --> {b}` but `{a}` is a shared kernel — "
+                f"every context depends ON the shared kernel, not the reverse. Reverse "
+                f"the arrow to `{b} --> {a}` (or drop the shared-kernel node)."
+            )
+        elif (a in name_of.values() and (b, a) in ref_deps
+              and (a, b) not in ref_deps):
             flagged_edges.add((a, b))
             issues.append(
                 f"L7 context-map draws `{a} --> {b}` (reads as `{a}` depends on `{b}`) "
@@ -367,6 +396,18 @@ def lint_design(spec: DesignSpec) -> list[str]:
                     f"aggregate (or drop the call) so the oracle only exercises the "
                     f"published API surface."
                 )
+
+    # L9 — a shared kernel modeled as a peer bounded context.
+    for ts in spec.tech_specs:
+        if _is_shared_kernel(ts.bounded_context):
+            issues.append(
+                f"L9 `{ts.bounded_context}` is listed as a bounded context, but a shared "
+                f"kernel is a shared MODULE the other contexts depend on (identifiers, "
+                f"Money/Email value objects, the DomainException hierarchy) — not a peer "
+                f"context. Don't give it its own Tech Spec / test_plan / BC row; home its "
+                f"types in an owning context or a clearly-labeled shared-kernel module the "
+                f"others reference (map arrows point TO it)."
+            )
 
     return issues
 

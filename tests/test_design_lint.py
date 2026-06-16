@@ -353,3 +353,40 @@ def test_l8_keeps_zero_arg_repository_finder() -> None:
     content = "var all = repo.findAll();\nservice.borrow(copyId);\n"
     assert any(i.startswith("L8") and "findAll" in i
                for i in _issues(_with_test(content)))
+
+
+# L9 — a shared kernel modeled as a peer bounded context.
+def test_l9_flags_shared_kernel_as_bounded_context() -> None:
+    spec = {
+        "summary": "x", "decisions": ["SharedKernel owns the ids"],
+        "tech_specs": [
+            {"bounded_context": "SharedKernel", "summary": "ids + exceptions",
+             "affected": ["sharedkernel/OrderId.java"]},
+            {"bounded_context": "Ordering", "summary": "o",
+             "affected": ["ordering/Order.java"]},
+        ],
+    }
+    found = _issues(spec)
+    assert any(i.startswith("L9") and "SharedKernel" in i for i in found)
+    assert not any(i.startswith("L9") and "Ordering" in i for i in found)
+
+
+def test_l9_not_flagged_for_normal_contexts() -> None:
+    assert not any(i.startswith("L9") for i in _issues(_CLEAN_MULTI))
+
+
+def test_l7_flags_arrow_out_of_shared_kernel_node() -> None:
+    # `Common` is a map-only node (no Tech Spec); arrows out of it are inverted.
+    spec = {
+        "summary": "x", "decisions": ["Common holds shared ids"],
+        "context_map": "graph LR\n  Common --> Catalog\n  Common -.-> Lending",
+        "tech_specs": [
+            {"bounded_context": "Catalog", "summary": "c",
+             "affected": ["catalog/Copy.java"]},
+            {"bounded_context": "Lending", "summary": "l",
+             "affected": ["lending/Loan.java"]},
+        ],
+    }
+    found = _issues(spec)
+    assert any(i.startswith("L7") and "Common --> Catalog" in i for i in found)
+    assert any(i.startswith("L7") and "Common --> Lending" in i for i in found)
