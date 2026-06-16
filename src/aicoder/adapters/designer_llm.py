@@ -120,6 +120,12 @@ implementation cannot compile no matter how good the coder is. Enforce:
   references a type owned by B). A downstream/coordinating context (e.g. Lending, which
   uses Copy from Catalog and Member from Membership) points TO the contexts it depends on
   — `Lending --> Catalog`, `Lending --> Membership`, never the reverse.
+- A SHARED KERNEL IS NOT A BOUNDED CONTEXT. Shared identifiers, Money/Email value objects
+  and the DomainException hierarchy belong in a shared-kernel module that EVERY context
+  depends on. Do NOT emit a `SharedKernel` / `Common` / `Kernel` tech_spec or list it as a
+  bounded context with its own test_plan; either home those types in one owning context or
+  keep them in a shared module — and in the map every context arrow points TO that module
+  (`Ordering --> SharedKernel`), never out of it.
 
 When an ANALYSIS section is provided (the upstream Analyst already pinned down WHAT
 to build), treat its acceptance criteria as the binding contract: every criterion

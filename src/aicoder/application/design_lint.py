@@ -43,11 +43,19 @@ multi-context requirement:
   L7  context-map arrow drawn against the real dependency: the map draws ``A --> B``
       (A depends on B) but the only cross-context reference runs the other way (B uses a
       type owned by A) — the architecture diagram contradicts the ownership decisions.
+  L9  a shared kernel modeled as a peer bounded context — a Tech Spec named
+      ``SharedKernel`` / ``Common`` / ``Kernel`` holding only shared value objects and the
+      exception hierarchy. A shared kernel is a shared MODULE the contexts depend on, not a
+      context of its own; this also tends to produce inverted context-map arrows (caught by
+      L7's shared-kernel case, which fires even for a map-only node with no Tech Spec).
   L8  the locked test oracle invokes an operation (``bookRepo.findAllCopies()``,
       ``memberRepo.findAll()``) that NO interface / domain model / key-flow declares —
       the oracle out-runs the published API surface, so the Coder must invent an
-      undeclared method to compile. Getters/setters, JUnit assertions and common JDK
-      calls are filtered out so only genuinely-undeclared domain operations are flagged.
+      undeclared method to compile. To stay high-precision, L8 filters out non-domain
+      calls: getters/setters, JUnit assertions, common JDK methods + BigDecimal
+      arithmetic, STATIC calls on a Type (``UUID.randomUUID()``), and zero-arg
+      value-object/record accessors (``copy.status()``) — while still keeping zero-arg
+      repository finders (``repo.findAll()``).
 
 Pure function over the domain models — no infra, no I/O, fully deterministic. Findings
 are advisory by default (surfaced to the architect gate); under ``design.review_strict``
@@ -76,11 +84,19 @@ _SHARED_KERNEL = re.compile(
 _MAP_EDGE = re.compile(r"\b([A-Za-z_]\w*)\b\s*-[.-]*->\s*(?:\|[^|]*\|\s*)?\b([A-Za-z_]\w*)\b")
 # `TC-CAT-01` -> context code `CAT`.
 _TC_CODE = re.compile(r"\bTC-([A-Za-z]+)-\d+", re.IGNORECASE)
-# A method INVOCATION on a receiver in test source: `.borrow(`, `.findAll(` (lower-case
-# start = a method call, not a `new Type(` constructor — those have no leading dot).
-_INVOKE = re.compile(r"\.([a-z]\w*)\s*\(")
+# A method INVOCATION in test source: `bookRepo.findAll(`, `UUID.randomUUID(` — captures
+# (receiver, method, empty-parens?). The leading receiver lets L8 drop static calls on a
+# Type (`UUID.randomUUID()`); the empty-parens group lets it drop zero-arg value-object
+# accessors (`copy.status()`). A `new Type(` constructor has no leading `name.` so it never
+# matches; a call chained on a result (`).foo(`) has no identifier receiver, also skipped.
+_INVOKE = re.compile(r"([A-Za-z_]\w*)\.([a-z]\w*)\s*\(\s*(\))?")
 # getters / setters / fluent accessors — never part of the published operation surface.
 _GETTERISH = re.compile(r"^(?:get|set|is|has)[A-Z]")
+# Verb prefixes that mark a genuine repository/port OPERATION even when zero-arg — so a
+# bare `repo.findAll()` is still checked, while `member.status()` (a record accessor) is
+# treated as a value read and skipped.
+_FINDER_VERBS = ("find", "save", "load", "fetch", "list", "count", "delete", "remove",
+                 "persist", "store", "query", "search", "lookup", "exists")
 # JDK / JUnit / std-lib calls a test makes that are NOT the design's API — kept out of L8
 # so the rule only flags genuinely-undeclared DOMAIN operations (false-positive guard).
 _JDK_NOISE = frozenset({
@@ -91,6 +107,9 @@ _JDK_NOISE = frozenset({
     "plusDays", "plusHours", "plusMinutes", "minus", "minusDays", "trim", "length",
     "charAt", "substring", "split", "replace", "thenReturn", "when", "verify", "mock",
     "any", "eq", "atZone", "toInstant", "from", "until", "between",
+    # BigDecimal / Money arithmetic and numeric conversions — not domain operations.
+    "multiply", "divide", "subtract", "abs", "negate", "setScale", "scale", "pow",
+    "signum", "round", "max", "min", "doubleValue", "intValue", "longValue",
 })
 
 # mermaid sequence keywords that can look like `word(...)` but are not method calls.
@@ -167,6 +186,18 @@ def _referenced_types(ts: TechSpec) -> set[str]:
 def _context_slugs(spec: DesignSpec) -> dict[str, str]:
     """lowercased bounded-context name -> the canonical name, one per Tech Spec."""
     return {ts.bounded_context.lower(): ts.bounded_context for ts in spec.tech_specs}
+
+
+# Conventional names for a shared-kernel / common-types module — which is a shared MODULE
+# every context depends on, NOT a peer bounded context.
+_SHARED_KERNEL_NAMES = frozenset({
+    "sharedkernel", "shared", "common", "commons", "kernel", "sharedmodule",
+    "sharedtypes", "shareddomain",
+})
+
+
+def _is_shared_kernel(name: str) -> bool:
+    return re.sub(r"[\s_-]+", "", name).lower() in _SHARED_KERNEL_NAMES
 
 
 def _path_context(path: str, slugs: dict[str, str]) -> str | None:
@@ -317,12 +348,24 @@ def lint_design(spec: DesignSpec) -> list[str]:
     name_of = {slug: name for slug, name in slugs.items()}
     flagged_edges: set[tuple[str, str]] = set()
     for a_raw, b_raw in _MAP_EDGE.findall(spec.context_map):
-        a, b = name_of.get(a_raw.lower()), name_of.get(b_raw.lower())
-        if not a or not b or a == b or (a, b) in flagged_edges:
+        b = name_of.get(b_raw.lower())
+        # the source may be a map-only node that is not a declared context (e.g. a
+        # `Common` shared-kernel node), so fall back to its raw name.
+        a = name_of.get(a_raw.lower(), a_raw)
+        if not b or a == b or (a, b) in flagged_edges:
             continue
-        # arrow a->b reads "a depends on b"; flag only when the references run b->a and
-        # NOT a->b (an unambiguous inversion).
-        if (b, a) in ref_deps and (a, b) not in ref_deps:
+        # arrow a->b reads "a depends on b". Two unambiguous inversions:
+        #  (1) `a` is a shared kernel — everyone depends ON it, never the reverse;
+        #  (2) both are real contexts and the only cross-reference runs b->a (not a->b).
+        if _is_shared_kernel(a_raw):
+            flagged_edges.add((a, b))
+            issues.append(
+                f"L7 context-map draws `{a} --> {b}` but `{a}` is a shared kernel — "
+                f"every context depends ON the shared kernel, not the reverse. Reverse "
+                f"the arrow to `{b} --> {a}` (or drop the shared-kernel node)."
+            )
+        elif (a in name_of.values() and (b, a) in ref_deps
+              and (a, b) not in ref_deps):
             flagged_edges.add((a, b))
             issues.append(
                 f"L7 context-map draws `{a} --> {b}` (reads as `{a}` depends on `{b}`) "
@@ -337,10 +380,14 @@ def lint_design(spec: DesignSpec) -> list[str]:
             if not t.content:
                 continue
             seen: set[str] = set()
-            for name in _INVOKE.findall(t.content):
+            for recv, name, emptyparen in _INVOKE.findall(t.content):
                 if (name in seen or name in api or name in _JDK_NOISE
                         or _GETTERISH.match(name)):
                     continue
+                if recv[:1].isupper():  # static call on a Type, e.g. UUID.randomUUID(...)
+                    continue
+                if emptyparen and not name.startswith(_FINDER_VERBS):
+                    continue  # zero-arg value-object / record accessor (copy.status())
                 seen.add(name)
                 issues.append(
                     f"L8 locked test `{t.id or t.path}` [{ts.bounded_context}] invokes "
@@ -349,6 +396,18 @@ def lint_design(spec: DesignSpec) -> list[str]:
                     f"aggregate (or drop the call) so the oracle only exercises the "
                     f"published API surface."
                 )
+
+    # L9 — a shared kernel modeled as a peer bounded context.
+    for ts in spec.tech_specs:
+        if _is_shared_kernel(ts.bounded_context):
+            issues.append(
+                f"L9 `{ts.bounded_context}` is listed as a bounded context, but a shared "
+                f"kernel is a shared MODULE the other contexts depend on (identifiers, "
+                f"Money/Email value objects, the DomainException hierarchy) — not a peer "
+                f"context. Don't give it its own Tech Spec / test_plan / BC row; home its "
+                f"types in an owning context or a clearly-labeled shared-kernel module the "
+                f"others reference (map arrows point TO it)."
+            )
 
     return issues
 
