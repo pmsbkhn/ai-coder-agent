@@ -46,8 +46,11 @@ multi-context requirement:
   L8  the locked test oracle invokes an operation (``bookRepo.findAllCopies()``,
       ``memberRepo.findAll()``) that NO interface / domain model / key-flow declares —
       the oracle out-runs the published API surface, so the Coder must invent an
-      undeclared method to compile. Getters/setters, JUnit assertions and common JDK
-      calls are filtered out so only genuinely-undeclared domain operations are flagged.
+      undeclared method to compile. To stay high-precision, L8 filters out non-domain
+      calls: getters/setters, JUnit assertions, common JDK methods + BigDecimal
+      arithmetic, STATIC calls on a Type (``UUID.randomUUID()``), and zero-arg
+      value-object/record accessors (``copy.status()``) — while still keeping zero-arg
+      repository finders (``repo.findAll()``).
 
 Pure function over the domain models — no infra, no I/O, fully deterministic. Findings
 are advisory by default (surfaced to the architect gate); under ``design.review_strict``
@@ -76,11 +79,19 @@ _SHARED_KERNEL = re.compile(
 _MAP_EDGE = re.compile(r"\b([A-Za-z_]\w*)\b\s*-[.-]*->\s*(?:\|[^|]*\|\s*)?\b([A-Za-z_]\w*)\b")
 # `TC-CAT-01` -> context code `CAT`.
 _TC_CODE = re.compile(r"\bTC-([A-Za-z]+)-\d+", re.IGNORECASE)
-# A method INVOCATION on a receiver in test source: `.borrow(`, `.findAll(` (lower-case
-# start = a method call, not a `new Type(` constructor — those have no leading dot).
-_INVOKE = re.compile(r"\.([a-z]\w*)\s*\(")
+# A method INVOCATION in test source: `bookRepo.findAll(`, `UUID.randomUUID(` — captures
+# (receiver, method, empty-parens?). The leading receiver lets L8 drop static calls on a
+# Type (`UUID.randomUUID()`); the empty-parens group lets it drop zero-arg value-object
+# accessors (`copy.status()`). A `new Type(` constructor has no leading `name.` so it never
+# matches; a call chained on a result (`).foo(`) has no identifier receiver, also skipped.
+_INVOKE = re.compile(r"([A-Za-z_]\w*)\.([a-z]\w*)\s*\(\s*(\))?")
 # getters / setters / fluent accessors — never part of the published operation surface.
 _GETTERISH = re.compile(r"^(?:get|set|is|has)[A-Z]")
+# Verb prefixes that mark a genuine repository/port OPERATION even when zero-arg — so a
+# bare `repo.findAll()` is still checked, while `member.status()` (a record accessor) is
+# treated as a value read and skipped.
+_FINDER_VERBS = ("find", "save", "load", "fetch", "list", "count", "delete", "remove",
+                 "persist", "store", "query", "search", "lookup", "exists")
 # JDK / JUnit / std-lib calls a test makes that are NOT the design's API — kept out of L8
 # so the rule only flags genuinely-undeclared DOMAIN operations (false-positive guard).
 _JDK_NOISE = frozenset({
@@ -91,6 +102,9 @@ _JDK_NOISE = frozenset({
     "plusDays", "plusHours", "plusMinutes", "minus", "minusDays", "trim", "length",
     "charAt", "substring", "split", "replace", "thenReturn", "when", "verify", "mock",
     "any", "eq", "atZone", "toInstant", "from", "until", "between",
+    # BigDecimal / Money arithmetic and numeric conversions — not domain operations.
+    "multiply", "divide", "subtract", "abs", "negate", "setScale", "scale", "pow",
+    "signum", "round", "max", "min", "doubleValue", "intValue", "longValue",
 })
 
 # mermaid sequence keywords that can look like `word(...)` but are not method calls.
@@ -337,10 +351,14 @@ def lint_design(spec: DesignSpec) -> list[str]:
             if not t.content:
                 continue
             seen: set[str] = set()
-            for name in _INVOKE.findall(t.content):
+            for recv, name, emptyparen in _INVOKE.findall(t.content):
                 if (name in seen or name in api or name in _JDK_NOISE
                         or _GETTERISH.match(name)):
                     continue
+                if recv[:1].isupper():  # static call on a Type, e.g. UUID.randomUUID(...)
+                    continue
+                if emptyparen and not name.startswith(_FINDER_VERBS):
+                    continue  # zero-arg value-object / record accessor (copy.status())
                 seen.add(name)
                 issues.append(
                     f"L8 locked test `{t.id or t.path}` [{ts.bounded_context}] invokes "

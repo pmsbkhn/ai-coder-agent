@@ -331,3 +331,25 @@ def test_l8_ignores_getters_asserts_and_jdk_calls() -> None:
 def test_l8_clean_when_oracle_uses_only_published_api() -> None:
     content = "var loan = service.borrow(copyId);\nrepo.save(loan);\n"
     assert not any(i.startswith("L8") for i in _issues(_with_test(content)))
+
+
+def test_l8_ignores_static_type_calls_and_record_accessors() -> None:
+    # the false positives a real run surfaced: UUID.randomUUID() (static factory),
+    # copy.status()/member.email() (zero-arg record accessors), rate.multiply(n)
+    # (BigDecimal arithmetic) — none are undeclared DOMAIN operations.
+    content = (
+        "var id = UUID.randomUUID();\n"
+        "assertEquals(Status.AVAILABLE, copy.status());\n"
+        "assertEquals(\"a@b.c\", member.email());\n"
+        "var total = rate.multiply(nights);\n"
+        "service.borrow(copyId);\n"  # declared in _L8_BASE api → also clean
+    )
+    found = [i for i in _issues(_with_test(content)) if i.startswith("L8")]
+    assert found == [], f"expected no L8 false positives, got: {found}"
+
+
+def test_l8_keeps_zero_arg_repository_finder() -> None:
+    # a zero-arg call is usually an accessor, EXCEPT finder-verb repo ops like findAll()
+    content = "var all = repo.findAll();\nservice.borrow(copyId);\n"
+    assert any(i.startswith("L8") and "findAll" in i
+               for i in _issues(_with_test(content)))
