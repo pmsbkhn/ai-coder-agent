@@ -37,15 +37,41 @@ def _worktree_dir(branch: str) -> Path:
     return (_REPO.parent / ".aicoder-worktrees" / f"{_REPO.name}__{safe}").resolve()
 
 
+def _branch_exists(branch: str) -> bool:
+    return _git(["rev-parse", "--verify", "--quiet", f"refs/heads/{branch}"],
+                _REPO).returncode == 0
+
+
 @mcp.tool()
 def start_task(branch: str) -> dict:
-    """Create an isolated worktree on a new branch off HEAD. Returns its path."""
+    """Create an isolated worktree for the task. IDEMPOTENT: session ids are
+    deterministic, so a re-run targets the same `feature/<sid>` branch + worktree
+    path. Recover from every leftover state instead of failing:
+      - a live worktree at the path  -> reuse it;
+      - a stale dir / stale registration -> prune + remove, then recreate;
+      - the branch already exists (prior run) but no live worktree -> attach it
+        with --force (resume that branch) rather than `add -b` (which errors
+        'a branch named ... already exists').
+    """
     wt = _worktree_dir(branch)
     wt.parent.mkdir(parents=True, exist_ok=True)
-    # if a stale worktree exists, reuse it rather than failing
+    _git(["worktree", "prune"], _REPO)  # drop registrations whose dir is gone
+
+    # A live worktree already checked out at this path → reuse it (in-run idempotency).
+    if (wt / ".git").exists():
+        return {"ok": True, "worktree": str(wt), "branch": branch, "reused": True}
+
+    # A leftover directory that is NOT a valid worktree → detach + delete it.
     if wt.exists():
-        return {"worktree": str(wt), "branch": branch, "reused": True}
-    proc = _git(["worktree", "add", "-b", branch, str(wt), "HEAD"], _REPO)
+        _git(["worktree", "remove", "--force", str(wt)], _REPO)
+        shutil.rmtree(wt, ignore_errors=True)
+
+    # `add -b` fails if the branch already exists (deterministic id re-run); when it
+    # does, attach the existing branch to a fresh worktree instead.
+    if _branch_exists(branch):
+        proc = _git(["worktree", "add", "--force", str(wt), branch], _REPO)
+    else:
+        proc = _git(["worktree", "add", "-b", branch, str(wt), "HEAD"], _REPO)
     if proc.returncode != 0:
         return {"ok": False, "error": proc.stderr.strip(), "worktree": "", "branch": branch}
     return {"ok": True, "worktree": str(wt), "branch": branch, "reused": False}
