@@ -584,3 +584,36 @@ def test_design_writes_testcases_doc_and_locks_only_executable() -> None:
     locked = next(t.payload["locked_tests"] for t in mem.get_traces(session.session_id)
                   if t.event_type == "DESIGN_APPROVED")
     assert locked == ["src/test/java/com/example/payment/PaymentAmountTest.java"]
+
+
+# --- Framework conventions injected from the Profile (MSFW primitives) ---------- #
+
+class _RecordingLLM:
+    """Captures the system prompt so we can assert profile conventions reach it."""
+    model = "fake"
+
+    def __init__(self) -> None:
+        self.system = ""
+
+    def complete_json(self, *, system, user, json_schema, tool_name="emit") -> dict:
+        self.system = system
+        return _VALID_DESIGN
+
+    def complete_text(self, *, system, user, max_tokens=2048) -> str:  # pragma: no cover
+        return ""
+
+
+def test_designer_injects_profile_conventions_into_system_prompt() -> None:
+    # the msfw profile now carries `conventions` (StringIdentity, IdempotencyKey, …)
+    assert _PROFILE.conventions, "msfw profile should define conventions"
+    llm = _RecordingLLM()
+    LLMDesigner(llm, _PROFILE).propose_design("add a note", "repo-map")
+    assert "Framework conventions" in llm.system
+    assert "StringIdentity" in llm.system  # a concrete primitive reached the prompt
+
+
+def test_designer_no_conventions_section_when_profile_lists_none() -> None:
+    prof = _PROFILE.model_copy(update={"conventions": []})
+    llm = _RecordingLLM()
+    LLMDesigner(llm, prof).propose_design("add a note", "repo-map")
+    assert "Framework conventions" not in llm.system  # framework-free profiles unchanged

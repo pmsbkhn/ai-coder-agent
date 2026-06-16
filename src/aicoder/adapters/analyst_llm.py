@@ -48,6 +48,21 @@ the VERDICT itself.
 """
 
 
+def _conventions_section(profile: ProjectProfile) -> str:
+    """Stack/framework primitives from the profile — so the Analyst frames its
+    assumptions on the existing types (ids extend StringIdentity, validation throws
+    InvalidArgumentException, …) instead of inventing alternatives. Empty when the
+    profile lists none."""
+    rules = getattr(profile, "conventions", None) or []
+    if not rules:
+        return ""
+    body = "\n".join(f"- {r}" for r in rules)
+    return (
+        "\n\n## Framework conventions (base your assumptions on these reusable "
+        "primitives; do not assume ad-hoc alternatives)\n" + body
+    )
+
+
 class LLMAnalyst:
     def __init__(
         self, client: LLMClient, profile: ProjectProfile, *, max_repo_map_chars: int = 12000
@@ -63,5 +78,6 @@ class LLMAnalyst:
             f"{repo_map[: self._cap]}"
         )
         return generate_structured(
-            self._client, system=_SYSTEM, user=user, model_cls=AnalysisSpec, retries=1
+            self._client, system=_SYSTEM + _conventions_section(self._profile),
+            user=user, model_cls=AnalysisSpec, retries=1,
         )

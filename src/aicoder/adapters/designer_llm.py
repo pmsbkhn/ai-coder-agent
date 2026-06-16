@@ -144,6 +144,21 @@ drop scope or delete test cases to make an issue "go away"; fix the contract.
 """
 
 
+def _conventions_section(profile: ProjectProfile) -> str:
+    """Stack/framework design conventions from the profile (e.g. MSFW domain
+    primitives) — appended to the system prompt so the Designer REUSES framework
+    types instead of re-inventing ids / exceptions / money per context. Empty when
+    the profile lists none, so framework-free profiles are unchanged."""
+    rules = getattr(profile, "conventions", None) or []
+    if not rules:
+        return ""
+    body = "\n".join(f"- {r}" for r in rules)
+    return (
+        "\n\n## Framework conventions (PREFER these reusable primitives — do not "
+        "re-invent them per context)\n" + body
+    )
+
+
 def _format_analysis(analysis: AnalysisSpec) -> str:
     """Render the upstream AnalysisSpec as a prompt section so the proposed tests
     trace to the explicit, human-visible acceptance criteria (ADR-08 Slice 3)."""
@@ -177,7 +192,8 @@ class LLMDesigner:
         if analysis is not None:
             user += _format_analysis(analysis)
         return generate_structured(
-            self._client, system=_SYSTEM, user=user, model_cls=DesignSpec, retries=1
+            self._client, system=_SYSTEM + _conventions_section(self._profile),
+            user=user, model_cls=DesignSpec, retries=1,
         )
 
     def revise_design(
@@ -197,6 +213,6 @@ class LLMDesigner:
         if analysis is not None:
             user += _format_analysis(analysis)
         return generate_structured(
-            self._client, system=_SYSTEM + _REVISE, user=user,
-            model_cls=DesignSpec, retries=1,
+            self._client, system=_SYSTEM + _conventions_section(self._profile) + _REVISE,
+            user=user, model_cls=DesignSpec, retries=1,
         )
