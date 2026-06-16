@@ -24,6 +24,31 @@ inconsistency — the kind that produced HEALING_FAILED on the Digital Library e
   L4  status-enum suffix drift (``CopyStatus`` + ``LoanState``) — a naming convention
       that invites the Coder to define one name and the test to import the other.
 
+The L1–L4 family guards CODE-BUILD consistency (will it compile / link?). The L5–L7
+family guards ORACLE & TRACEABILITY quality — a design can compile and still ship a
+test oracle that does not actually pin the behavior, or a per-context test-case set
+that does not trace to its context. These are the gaps an e2e run surfaced on a vague
+multi-context requirement:
+
+  L5  a test case is filed under the WRONG bounded context — its id (``TC-<CTX>-NN``)
+      or its executable path's package belongs to a different context's Tech Spec than
+      the one whose ``test_plan`` carries it. (This is what dumped every Catalog/
+      Membership/Lending case into the Catalog doc and left the Lending doc empty,
+      breaking the "1 BC = 1 Test-Case doc" traceability.)
+  L6  oracle-coverage gaps: (6a) a ``domain`` case that SPECIFIES behavior but locks no
+      executable oracle (empty ``path``/``content``) — the happy path / invariant is
+      documented in prose but nothing holds the Coder to it; (6b) a bounded context with
+      an EMPTY ``test_plan`` while sibling contexts carry cases — that context ships no
+      acceptance oracle at all.
+  L7  context-map arrow drawn against the real dependency: the map draws ``A --> B``
+      (A depends on B) but the only cross-context reference runs the other way (B uses a
+      type owned by A) — the architecture diagram contradicts the ownership decisions.
+  L8  the locked test oracle invokes an operation (``bookRepo.findAllCopies()``,
+      ``memberRepo.findAll()``) that NO interface / domain model / key-flow declares —
+      the oracle out-runs the published API surface, so the Coder must invent an
+      undeclared method to compile. Getters/setters, JUnit assertions and common JDK
+      calls are filtered out so only genuinely-undeclared domain operations are flagged.
+
 Pure function over the domain models — no infra, no I/O, fully deterministic. Findings
 are advisory by default (surfaced to the architect gate); under ``design.review_strict``
 a non-empty result blocks the run before the human gate, just like a failed review.
@@ -46,6 +71,27 @@ _SHARED_KERNEL = re.compile(
     r"shared[- ]?kernel|published[- ]?language|anti[- ]?corruption|\bACL\b|conformist",
     re.IGNORECASE,
 )
+# A directed edge in a mermaid context map: `A -->|label| B`, `A --> B`, `A -.-> B`.
+# Captures (source, target); the arrowhead points at the target.
+_MAP_EDGE = re.compile(r"\b([A-Za-z_]\w*)\b\s*-[.-]*->\s*(?:\|[^|]*\|\s*)?\b([A-Za-z_]\w*)\b")
+# `TC-CAT-01` -> context code `CAT`.
+_TC_CODE = re.compile(r"\bTC-([A-Za-z]+)-\d+", re.IGNORECASE)
+# A method INVOCATION on a receiver in test source: `.borrow(`, `.findAll(` (lower-case
+# start = a method call, not a `new Type(` constructor — those have no leading dot).
+_INVOKE = re.compile(r"\.([a-z]\w*)\s*\(")
+# getters / setters / fluent accessors — never part of the published operation surface.
+_GETTERISH = re.compile(r"^(?:get|set|is|has)[A-Z]")
+# JDK / JUnit / std-lib calls a test makes that are NOT the design's API — kept out of L8
+# so the rule only flags genuinely-undeclared DOMAIN operations (false-positive guard).
+_JDK_NOISE = frozenset({
+    "get", "add", "remove", "contains", "size", "isEmpty", "isBlank", "stream",
+    "filter", "collect", "map", "forEach", "toList", "of", "ofNullable", "orElse",
+    "orElseThrow", "isPresent", "equals", "hashCode", "toString", "name", "ordinal",
+    "values", "valueOf", "compareTo", "format", "fixed", "parse", "now", "plus",
+    "plusDays", "plusHours", "plusMinutes", "minus", "minusDays", "trim", "length",
+    "charAt", "substring", "split", "replace", "thenReturn", "when", "verify", "mock",
+    "any", "eq", "atZone", "toInstant", "from", "until", "between",
+})
 
 # mermaid sequence keywords that can look like `word(...)` but are not method calls.
 _FLOW_KEYWORDS = {"alt", "opt", "loop", "par", "note", "activate", "deactivate",
@@ -72,6 +118,19 @@ def _declared_method_names(spec: DesignSpec) -> set[str]:
     names: set[str] = set()
     for ts in spec.tech_specs:
         text = "\n".join(ts.interface_changes) + "\n" + ts.domain_model
+        names |= {name for name, _ in _METHOD.findall(text)}
+    return names
+
+
+def _api_surface(spec: DesignSpec) -> set[str]:
+    """Every method name the design PUBLISHES anywhere — interface contracts, domain
+    model, and key-flow sequences, across all contexts. The locked oracle (L8) may only
+    invoke operations drawn from this surface; anything else is an API the Coder would
+    have to invent because the design never declared it."""
+    names: set[str] = set()
+    for ts in spec.tech_specs:
+        text = ("\n".join(ts.interface_changes) + "\n" + ts.domain_model
+                + "\n" + ts.key_flows)
         names |= {name for name, _ in _METHOD.findall(text)}
     return names
 
@@ -103,6 +162,36 @@ def _owners(spec: DesignSpec) -> dict[str, set[str]]:
 def _referenced_types(ts: TechSpec) -> set[str]:
     text = "\n".join(ts.interface_changes) + "\n" + ts.domain_model + "\n" + ts.key_flows
     return set(_TYPE_TOKEN.findall(text))
+
+
+def _context_slugs(spec: DesignSpec) -> dict[str, str]:
+    """lowercased bounded-context name -> the canonical name, one per Tech Spec."""
+    return {ts.bounded_context.lower(): ts.bounded_context for ts in spec.tech_specs}
+
+
+def _path_context(path: str, slugs: dict[str, str]) -> str | None:
+    """The bounded context a test path lives in, by matching a package segment against a
+    known context slug (`.../library/membership/MembershipServiceTest.java` -> the
+    Membership context). None if no/ambiguous match."""
+    segs = {s.lower() for s in path.replace("\\", "/").split("/")}
+    hits = [name for slug, name in slugs.items() if slug in segs]
+    return hits[0] if len(hits) == 1 else None
+
+
+def _ref_dependencies(spec: DesignSpec, owners: dict[str, set[str]]) -> set[tuple[str, str]]:
+    """`(referencer_ctx, owner_ctx)` pairs: a context references a domain type owned by a
+    single OTHER context. This is the real cross-context dependency direction, used by L7
+    to check the context-map arrows regardless of any shared-kernel decision."""
+    deps: set[tuple[str, str]] = set()
+    for ts in spec.tech_specs:
+        for t in _referenced_types(ts):
+            own = owners.get(t)
+            if not own or len(own) != 1 or t.endswith(_SERVICE_SUFFIXES):
+                continue
+            owner = next(iter(own))
+            if owner != ts.bounded_context:
+                deps.add((ts.bounded_context, owner))
+    return deps
 
 
 def lint_design(spec: DesignSpec) -> list[str]:
@@ -179,6 +268,87 @@ def lint_design(spec: DesignSpec) -> list[str]:
             f"{sorted(stateish)} use `…State` — standardize one convention so the "
             f"production code and the locked tests agree on the name."
         )
+
+    slugs = _context_slugs(spec)
+
+    # L5 — a test case is filed under the wrong context's Tech Spec.
+    for ts in spec.tech_specs:
+        for t in ts.test_plan:
+            if t.kind == "fitness":  # fitness rules may legitimately span contexts
+                continue
+            home = _path_context(t.path, slugs) if t.path else None
+            if home is None:  # fall back to the TC-<CTX>-NN code when there is no path
+                m = _TC_CODE.search(t.id)
+                code = m.group(1).lower() if m else ""
+                for slug, name in slugs.items():
+                    if code and slug.startswith(code):
+                        home = name
+                        break
+            if home and home != ts.bounded_context:
+                issues.append(
+                    f"L5 test case `{t.id or t.title or t.path}` is filed under the "
+                    f"`{ts.bounded_context}` Tech Spec but belongs to `{home}` (its "
+                    f"id/path names that context) — move it to `{home}`'s test_plan so "
+                    f"each context's Test-Case doc traces to its own context."
+                )
+
+    # L6a — a domain case specifies behavior but locks no executable oracle.
+    for ts in spec.tech_specs:
+        for t in ts.test_plan:
+            if t.kind == "domain" and t.spec.strip() and not (t.path and t.content):
+                issues.append(
+                    f"L6 domain case `{t.id or t.title}` [{ts.bounded_context}] specifies "
+                    f"behavior but locks no executable oracle (path+content) — happy paths "
+                    f"and invariants must be locked as runnable tests, not left spec-only."
+                )
+
+    # L6b — a bounded context carries no test cases at all (multi-context designs).
+    if len(spec.tech_specs) > 1:
+        for ts in spec.tech_specs:
+            if not ts.test_plan:
+                issues.append(
+                    f"L6 context `{ts.bounded_context}` has an empty test_plan — every "
+                    f"bounded context must carry its own acceptance cases (1 BC = 1 "
+                    f"Test-Case doc); add its domain cases or move the misfiled ones here."
+                )
+
+    # L7 — a context-map arrow drawn against the real dependency direction.
+    ref_deps = _ref_dependencies(spec, owners)
+    name_of = {slug: name for slug, name in slugs.items()}
+    flagged_edges: set[tuple[str, str]] = set()
+    for a_raw, b_raw in _MAP_EDGE.findall(spec.context_map):
+        a, b = name_of.get(a_raw.lower()), name_of.get(b_raw.lower())
+        if not a or not b or a == b or (a, b) in flagged_edges:
+            continue
+        # arrow a->b reads "a depends on b"; flag only when the references run b->a and
+        # NOT a->b (an unambiguous inversion).
+        if (b, a) in ref_deps and (a, b) not in ref_deps:
+            flagged_edges.add((a, b))
+            issues.append(
+                f"L7 context-map draws `{a} --> {b}` (reads as `{a}` depends on `{b}`) "
+                f"but the references run the other way — `{b}` uses a type owned by "
+                f"`{a}`. Reverse the arrow to `{b} --> {a}` so the map matches ownership."
+            )
+
+    # L8 — a locked test invokes an operation the design never declares.
+    api = _api_surface(spec)
+    for ts in spec.tech_specs:
+        for t in ts.test_plan:
+            if not t.content:
+                continue
+            seen: set[str] = set()
+            for name in _INVOKE.findall(t.content):
+                if (name in seen or name in api or name in _JDK_NOISE
+                        or _GETTERISH.match(name)):
+                    continue
+                seen.add(name)
+                issues.append(
+                    f"L8 locked test `{t.id or t.path}` [{ts.bounded_context}] invokes "
+                    f"`{name}(...)` but no interface / domain model / key-flow in the "
+                    f"design declares it — declare `{name}` on the owning port or "
+                    f"aggregate (or drop the call) so the oracle only exercises the "
+                    f"published API surface."
+                )
 
     return issues
 

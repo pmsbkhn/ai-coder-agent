@@ -81,6 +81,23 @@ Produce concrete cases that pin the behavior. For EACH case give:
   @EventPublishHandler"; "controllers have no generic try/catch → GlobalExceptionHandler".
 Include at least the relevant domain-invariant cases for every invariant you listed.
 
+## Test ownership & coverage (this is where designs leak)
+- ONE BC = ONE test_plan. File each case in the test_plan of the context it tests. A
+  `TC-<CTX>-NN` and its executable `path` package MUST name the SAME context that owns
+  the test_plan it sits in — never dump another context's cases (e.g. TC-LEN-* under the
+  Catalog spec). Every bounded context's test_plan MUST be non-empty.
+- LOCK THE HAPPY PATH, not just the errors. Every "domain" case — including the happy
+  path (successful borrow, successful return, successful registration) and every numeric
+  rule you assume (a 14-day due date, a 5-loan limit) — MUST ship an executable oracle
+  (`path` + full `content`). A behavior left spec-only is NOT enforced: do not document a
+  happy path in prose and then lock only the exception cases.
+- THE ORACLE MAY ONLY CALL THE PUBLISHED API. Every method your test `content` invokes on
+  a port/repository/service (`bookRepo.findAllCopies()`, `memberRepo.save(...)`) MUST be
+  declared in that context's `interface_changes` — do not let a test call a method the
+  design never specified, or the Coder has to invent it. The shared error type
+  (`DomainException` + its `DomainErrorCode`/`getErrorCode()`) is cross-cutting: give it a
+  single declared owner (shared kernel) and reference it from there, never per context.
+
 ## Cross-context consistency (multi-bounded-context designs)
 A design spanning several bounded contexts MUST be internally consistent, or the
 implementation cannot compile no matter how good the coder is. Enforce:
@@ -99,6 +116,10 @@ implementation cannot compile no matter how good the coder is. Enforce:
 - CONSISTENT NAMING: pick ONE convention and hold it across all contexts — status enums
   ALWAYS end `…Status` (do not mix `…Status` and `…State`), identities are the same type
   (e.g. UUID) everywhere, and the production type name matches what the locked test imports.
+- CONTEXT-MAP ARROWS follow the dependency: draw `A --> B` only when A depends on B (A
+  references a type owned by B). A downstream/coordinating context (e.g. Lending, which
+  uses Copy from Catalog and Member from Membership) points TO the contexts it depends on
+  — `Lending --> Catalog`, `Lending --> Membership`, never the reverse.
 
 When an ANALYSIS section is provided (the upstream Analyst already pinned down WHAT
 to build), treat its acceptance criteria as the binding contract: every criterion

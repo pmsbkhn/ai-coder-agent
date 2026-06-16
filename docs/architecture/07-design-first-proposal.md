@@ -120,7 +120,7 @@ The saga briefly re-enters `PLANNING`: `INIT → PLANNING → DESIGNING → AWAI
   (pure, deterministic) + `render_contracts(spec)` (the per-context contracts digest fed
   to the Reviewer and to `revise_design`).
 - **Session states**: `DESIGNING`, `AWAITING_APPROVAL` (+ transitions); `ApprovalPort.request_approval(kind, summary)` gains a `kind`.
-- **Config**: `design.mode = off | auto | always` in the Project Profile; `AICODER_DESIGN` env override; complexity heuristic (or Designer self-classifies) for `auto`; `design.review_strict`; `design.max_design_repairs` (design-heal budget, default 1, 0 = off).
+- **Config**: `design.mode = off | auto | always` in the Project Profile; `AICODER_DESIGN` env override; complexity heuristic (or Designer self-classifies) for `auto`; `design.review_strict`; `design.max_design_repairs` (design-heal budget, default 2, 0 = off).
 - **Orchestrator**: a `DESIGNING → lint → (bounded heal) → review → approval → lock-tests → CODING` segment before the coding phase (`_repair_design`).
 
 ## Risks & mitigations
@@ -193,15 +193,28 @@ The saga briefly re-enters `PLANNING`: `INIT → PLANNING → DESIGNING → AWAI
    (`CopyStatus` vs `LoanState`). The adversarial Reviewer (Slice 4) could not catch any
    of it — **it only saw the tests, never the contracts**. Three additions close the gap:
    - **(linter)** `application/design_lint.py` — a **pure, deterministic** `lint_design`
-     cross-checks the `DesignSpec` for: L1 a method invoked in a key-flow that no
-     interface/aggregate declares; L2 the same method declared with conflicting arity
-     across two interface contracts; L3 a type owned by ≥2 contexts (L3a) or referenced
-     across a boundary with no shared-kernel / published-language decision (L3b); L4
-     status-enum suffix drift. No model call — consistent with the "verifier
-     deterministic-first" principle. Logs `DESIGN_LINT {ok, issues, repairs}`.
+     cross-checks the `DesignSpec`. Two families: **L1–L4 guard code-build consistency** —
+     L1 a method invoked in a key-flow that no interface/aggregate declares; L2 the same
+     method declared with conflicting arity across two interface contracts; L3 a type owned
+     by ≥2 contexts (L3a) or referenced across a boundary with no shared-kernel / published-
+     language decision (L3b); L4 status-enum suffix drift. **L5–L8 guard oracle and
+     traceability quality** (a design can compile and still ship a weak oracle) — L5 a test
+     case filed under the wrong context (its `TC-<CTX>-NN` id or its executable path's
+     package names a different context than the Tech Spec carrying it); L6 oracle-coverage
+     gaps (6a a `domain` case that specifies behavior but locks no executable oracle — a
+     spec-only happy path; 6b a bounded context with an empty `test_plan`); L7 a context-map
+     arrow drawn against the real dependency (map says `A --> B` but the only cross-context
+     reference runs `B → A`). No model call — consistent with the "verifier deterministic-
+     first" principle. Logs `DESIGN_LINT {ok, issues, repairs}`. L8 a locked
+     test that invokes an operation (`bookRepo.findAllCopies()`) no interface / domain model
+     / key-flow declares — the oracle out-runs the published API, so the Coder must invent it
+     (getters, JUnit asserts and common JDK calls are filtered out to avoid false positives).
+     (L5–L8 added after a vague multi-context e2e run designed cleanly but mis-filed every
+     case into one context's doc, left happy paths spec-only, inverted the context-map
+     arrows, and locked tests against undeclared repository methods.)
    - **(design-heal)** the orchestrator's `_repair_design` hands any lint findings back to
      the Designer's new `revise_design(...)` and re-lints, bounded by
-     `design.max_design_repairs` (default 1, 0 = off). Keyed on the **linter** (objective,
+     `design.max_design_repairs` (default 2, 0 = off). Keyed on the **linter** (objective,
      machine-checkable), not the advisory LLM review. Logs `DESIGN_REVISED` per attempt;
      the architect then gates a design that is already consistent (or, if heal can't
      converge, sees the residual issues). Under `review_strict`, a failed review **or** an

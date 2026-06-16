@@ -91,12 +91,18 @@ def render_ad(spec: DesignSpec, requirement: str, docs_dir: str = _DOCS_SUBDIR) 
 
 def render_tech_spec(ts: TechSpec, docs_dir: str = _DOCS_SUBDIR) -> str:
     """The technical specification for one bounded context (core design sections)."""
+    # One file can back several cases (many @Test methods) — list each oracle path once,
+    # in first-seen order, so §9 is not a duplicated dump of the same file.
+    oracle_paths: list[str] = []
+    for t in ts.test_plan:
+        if t.path and t.path not in oracle_paths:
+            oracle_paths.append(t.path)
     tests_line = (
         f"See [`{test_cases_path(ts, docs_dir).split('/')[-1]}`]"
         f"({test_cases_path(ts, docs_dir).split('/')[-1]}) for the full case list. "
         f"Executable oracle (locked):\n"
-        + (_bullets([f"`{t.path}`" for t in ts.test_plan if t.path])
-           if any(t.path for t in ts.test_plan) else "_(spec-only — no executable file)_")
+        + (_bullets([f"`{p}`" for p in oracle_paths])
+           if oracle_paths else "_(spec-only — no executable file)_")
     )
     return (
         f"# Tech Spec — {ts.bounded_context}\n\n"
