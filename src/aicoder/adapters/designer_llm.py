@@ -12,6 +12,7 @@ from __future__ import annotations
 
 from aicoder.adapters.llm.base import LLMClient
 from aicoder.adapters.llm.structured import generate_structured
+from aicoder.application.design_lint import render_contracts
 from aicoder.application.profile import ProjectProfile
 from aicoder.domain.models import AnalysisSpec, DesignSpec
 
@@ -80,10 +81,39 @@ Produce concrete cases that pin the behavior. For EACH case give:
   @EventPublishHandler"; "controllers have no generic try/catch → GlobalExceptionHandler".
 Include at least the relevant domain-invariant cases for every invariant you listed.
 
+## Cross-context consistency (multi-bounded-context designs)
+A design spanning several bounded contexts MUST be internally consistent, or the
+implementation cannot compile no matter how good the coder is. Enforce:
+- SHARED KERNEL / ownership: when two or more contexts use the same concept (a `Copy`,
+  a `Money`, a `CustomerId`), exactly ONE context OWNS the type; the others reference it
+  through that owner (shared kernel / published language) or an anti-corruption
+  translation. NEVER let each context redefine its own `Copy` / `CopyStatus`. Record the
+  owner AND the crossing mechanism in the AD `decisions` (e.g. "Catalog owns Copy /
+  CopyStatus; Lending references them via the Catalog published language, not a copy").
+- ONE SIGNATURE per operation: a method or type has a single signature everywhere — the
+  interface, the domain model, and the tests must agree (the only allowed difference is a
+  domain service carrying an id the aggregate method does not). Every method drawn in a
+  key-flow sequence diagram MUST be declared on some interface or on an aggregate in the
+  domain model — never call a method that does not exist (a flow that calls
+  `setCopyStatus(...)` REQUIRES that method on a declared port/aggregate).
+- CONSISTENT NAMING: pick ONE convention and hold it across all contexts — status enums
+  ALWAYS end `…Status` (do not mix `…Status` and `…State`), identities are the same type
+  (e.g. UUID) everywhere, and the production type name matches what the locked test imports.
+
 When an ANALYSIS section is provided (the upstream Analyst already pinned down WHAT
 to build), treat its acceptance criteria as the binding contract: every criterion
 MUST be covered by at least one test case, and your design must honor the stated
 assumptions. Do not contradict or silently widen the analyzed scope.
+"""
+
+_REVISE = """
+You are REVISING a design you already produced. A deterministic linter found
+cross-document consistency problems (listed below) that would break the build. Return a
+CORRECTED DesignSpec — same scope, same bounded contexts — that resolves EVERY listed
+issue. Typical fixes: declare a missing method on the right port; give a shared type a
+single owner and reference it from the other context (shared kernel / published
+language); reconcile a method/type to one signature; unify a naming convention. Do NOT
+drop scope or delete test cases to make an issue "go away"; fix the contract.
 """
 
 
@@ -121,4 +151,25 @@ class LLMDesigner:
             user += _format_analysis(analysis)
         return generate_structured(
             self._client, system=_SYSTEM, user=user, model_cls=DesignSpec, retries=1
+        )
+
+    def revise_design(
+        self, requirement: str, repo_map: str, previous: DesignSpec,
+        issues: list[str], analysis: AnalysisSpec | None = None,
+    ) -> DesignSpec:
+        """Re-emit a corrected DesignSpec that resolves the deterministic linter's
+        consistency findings (design-heal, M07). Same scope/contexts as `previous`."""
+        problems = "\n".join(f"- {i}" for i in issues) or "- (none)"
+        user = (
+            f"# Requirement\n{requirement}\n\n"
+            f"# Repo Map (skeleton)\n{repo_map[: self._cap]}\n\n"
+            f"# Your previous design (contracts digest — to be corrected)\n"
+            f"{render_contracts(previous)}\n\n"
+            f"# Consistency issues a deterministic linter found (FIX ALL)\n{problems}"
+        )
+        if analysis is not None:
+            user += _format_analysis(analysis)
+        return generate_structured(
+            self._client, system=_SYSTEM + _REVISE, user=user,
+            model_cls=DesignSpec, retries=1,
         )

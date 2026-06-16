@@ -53,15 +53,22 @@ def _passed() -> VerificationResult:
 
 
 class FakeDesigner:
-    def __init__(self, design: dict | None = None) -> None:
+    def __init__(self, design: dict | None = None, revised: dict | None = None) -> None:
         self.calls = 0
+        self.revise_calls = 0
         self._design = design or _VALID_DESIGN
+        self._revised = revised  # design returned by revise_design; None = unchanged
         self.seen_analysis = None  # the AnalysisSpec handed in (ADR-08 Slice 3), if any
 
     def propose_design(self, requirement: str, repo_map: str, analysis=None) -> DesignSpec:
         self.calls += 1
         self.seen_analysis = analysis
         return DesignSpec.model_validate(self._design)
+
+    def revise_design(self, requirement, repo_map, previous, issues, analysis=None) -> DesignSpec:
+        self.revise_calls += 1
+        self.seen_analysis = analysis
+        return DesignSpec.model_validate(self._revised if self._revised is not None else self._design)
 
 
 class _RecordingGateway(FakeGateway):
@@ -236,8 +243,9 @@ class _Reviewer:
         self.concerns = concerns or []
         self.calls = 0
 
-    def review_tests(self, requirement, design_summary, tests) -> _ReviewModel:
+    def review_tests(self, requirement, design_summary, tests, contracts="") -> _ReviewModel:
         self.calls += 1
+        self.seen_contracts = contracts          # (1) Reviewer now receives the contracts
         return _ReviewModel(ok=self.ok, concerns=self.concerns)
 
 
@@ -282,6 +290,145 @@ def test_review_advisory_surfaces_concerns_then_human_approves() -> None:
     payload = next(t.payload for t in mem.get_traces(session.session_id)
                    if t.event_type == "APPROVAL_REQUESTED")
     assert payload["review_concerns"] == ["missing the insufficient-funds case"]
+
+
+# --- Deterministic design linter wired into the gate ---------------------------
+
+# A two-context design with the e2e run's flaws (undeclared call + cross-context type).
+_INCONSISTENT_DESIGN = {
+    "summary": "Lending coordinates Catalog copies.",
+    "decisions": [],
+    "tech_specs": [
+        {"bounded_context": "Catalog", "summary": "copies",
+         "affected": ["src/main/java/lib/catalog/Copy.java",
+                      "src/main/java/lib/catalog/CatalogService.java"],
+         "interface_changes": ["interface CatalogService { Optional<Copy> findCopy(UUID id); }"],
+         "test_plan": [{"path": "src/test/java/CatT.java", "content": "//", "rationale": "x"}]},
+        {"bounded_context": "Lending", "summary": "loans",
+         "affected": ["src/main/java/lib/lending/Loan.java"],
+         "interface_changes": ["interface LendingService { Loan createLoan(UUID copyId); }"],
+         "key_flows": "sequenceDiagram\n  LoanAggregate->>CatalogService: setCopyStatus(ON_LOAN)\n"
+                      "  CatalogService-->>LendingService: Copy(AVAILABLE)",
+         "test_plan": [{"path": "src/test/java/LenT.java", "content": "//", "rationale": "y"}]},
+    ],
+}
+
+
+def test_design_lint_logged_and_surfaced_to_architect() -> None:
+    mem = InMemoryMemory()
+    plan = Plan(tasks=[Task(id="t1", description="x", target_files=["A.java"])])
+    orch = Orchestrator(
+        profile=_PROFILE, planner=FakePlanner(plan), coder=FakeCoder(),
+        memory=mem, gateway=FakeGateway(), build=FakeBuild([_passed()]),
+        designer=FakeDesigner(_INCONSISTENT_DESIGN), design_mode="always",
+        approval=_Approval(True),  # non-strict → advisory: lint surfaced, run proceeds
+    )
+    session = orch.run_requirement("x")
+    assert session.state is SessionState.DONE
+    traces = mem.get_traces(session.session_id)
+    lint = next(t.payload for t in traces if t.event_type == "DESIGN_LINT")
+    assert lint["ok"] is False and lint["issues"]
+    appr = next(t.payload for t in traces if t.event_type == "APPROVAL_REQUESTED")
+    assert appr["lint_issues"]                          # carried to the human gate
+    assert any("setCopyStatus" in i for i in appr["lint_issues"])  # L1 caught
+
+
+def test_lint_strict_blocks_inconsistent_design_without_a_reviewer() -> None:
+    mem = InMemoryMemory()
+    plan = Plan(tasks=[Task(id="t1", description="x", target_files=["A.java"])])
+    orch = Orchestrator(
+        profile=_strict_profile(), planner=FakePlanner(plan), coder=FakeCoder(),
+        memory=mem, gateway=FakeGateway(), build=FakeBuild([_passed()]),
+        designer=FakeDesigner(_INCONSISTENT_DESIGN), design_mode="always",
+        approval=_Approval(True), reviewer=None,        # lint alone drives the block
+    )
+    session = orch.run_requirement("x")
+    assert session.state is SessionState.BLOCKED
+    events = [t.event_type for t in mem.get_traces(session.session_id)]
+    assert "DESIGN_LINT" in events and "DESIGN_REJECTED" in events
+    assert "APPROVAL_REQUESTED" not in events           # blocked before the human gate
+    assert "DIFF_APPLIED" not in events
+    rej = next(t.payload for t in mem.get_traces(session.session_id)
+               if t.event_type == "DESIGN_REJECTED")
+    assert rej["lint_issues"]
+
+
+def test_reviewer_receives_contracts() -> None:
+    mem, rev = InMemoryMemory(), _Reviewer(True)
+    _reviewed_orch(_Approval(True), rev, mem).run_requirement("x")
+    assert "OrderService" in rev.seen_contracts        # interfaces digest reached the reviewer
+
+
+# --- Design-heal: auto-revise on deterministic lint findings (bounded) ----------
+
+# A corrected version of _INCONSISTENT_DESIGN: setCopyStatus is declared, Copy has a
+# single owner referenced via a shared-kernel decision, no arity clash, no naming drift.
+_REPAIRED_DESIGN = {
+    "summary": "Lending coordinates Catalog copies.",
+    "decisions": ["Catalog owns Copy; Lending references it via the Catalog "
+                  "published language (shared kernel), not its own copy."],
+    "tech_specs": [
+        {"bounded_context": "Catalog", "summary": "copies",
+         "affected": ["src/main/java/lib/catalog/Copy.java",
+                      "src/main/java/lib/catalog/CatalogService.java"],
+         "interface_changes": ["interface CatalogService { Optional<Copy> findCopy(UUID id); "
+                               "void setCopyStatus(UUID id, CopyStatus s); }"],
+         "test_plan": [{"path": "src/test/java/CatT.java", "content": "//", "rationale": "x"}]},
+        {"bounded_context": "Lending", "summary": "loans",
+         "affected": ["src/main/java/lib/lending/Loan.java"],
+         "interface_changes": ["interface LendingService { Loan createLoan(UUID copyId); }"],
+         "key_flows": "sequenceDiagram\n  LoanAggregate->>CatalogService: setCopyStatus(id, ON_LOAN)",
+         "test_plan": [{"path": "src/test/java/LenT.java", "content": "//", "rationale": "y"}]},
+    ],
+}
+
+
+def _heal_orch(designer, profile, mem):
+    plan = Plan(tasks=[Task(id="t1", description="x", target_files=["A.java"])])
+    return Orchestrator(
+        profile=profile, planner=FakePlanner(plan), coder=FakeCoder(),
+        memory=mem, gateway=FakeGateway(), build=FakeBuild([_passed()]),
+        designer=designer, design_mode="always", approval=_Approval(True), reviewer=None,
+    )
+
+
+def test_design_heal_converges_before_the_gate() -> None:
+    mem = InMemoryMemory()
+    designer = FakeDesigner(_INCONSISTENT_DESIGN, revised=_REPAIRED_DESIGN)
+    # strict profile would BLOCK an inconsistent design — so reaching DONE proves the
+    # repair pass cleaned it up before the gate.
+    session = _heal_orch(designer, _strict_profile(), mem).run_requirement("x")
+    assert session.state is SessionState.DONE
+    assert designer.revise_calls == 1
+    traces = mem.get_traces(session.session_id)
+    events = [t.event_type for t in traces]
+    assert "DESIGN_REVISED" in events and "DESIGN_REJECTED" not in events
+    lint = next(t.payload for t in traces if t.event_type == "DESIGN_LINT")
+    assert lint["ok"] is True and lint["repairs"] == 1
+
+
+def test_design_heal_is_bounded_then_blocks_when_unfixed() -> None:
+    mem = InMemoryMemory()
+    designer = FakeDesigner(_INCONSISTENT_DESIGN)  # revise returns the same → never converges
+    session = _heal_orch(designer, _strict_profile(), mem).run_requirement("x")
+    assert session.state is SessionState.BLOCKED
+    assert designer.revise_calls == 1              # capped by max_design_repairs (default 1)
+    events = [t.event_type for t in mem.get_traces(session.session_id)]
+    assert events.count("DESIGN_REVISED") == 1 and "DESIGN_REJECTED" in events
+
+
+def test_design_repairs_can_be_disabled() -> None:
+    mem = InMemoryMemory()
+    prof = _PROFILE.model_copy(
+        update={"design": _PROFILE.design.model_copy(update={"max_design_repairs": 0})})
+    designer = FakeDesigner(_INCONSISTENT_DESIGN, revised=_REPAIRED_DESIGN)
+    session = _heal_orch(designer, prof, mem).run_requirement("x")  # non-strict default
+    assert session.state is SessionState.DONE      # advisory: surfaced, not blocked
+    assert designer.revise_calls == 0
+    traces = mem.get_traces(session.session_id)
+    assert "DESIGN_REVISED" not in [t.event_type for t in traces]
+    lint = next(t.payload for t in traces if t.event_type == "DESIGN_LINT")
+    assert lint["ok"] is False and lint["repairs"] == 0
 
 
 # --- Explicit AD + Tech Spec files (1 bounded context = 1 tech spec) ------------

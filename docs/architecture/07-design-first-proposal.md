@@ -1,7 +1,8 @@
 # 07 — Proposal / ADR: Explicit Design-First Phase
 
-**Status:** **IMPLEMENTED — all 4 slices done** (Designer role + DesignSpec/TestPlan;
-human gate + approved tests locked as the oracle; adversarial test review).
+**Status:** **IMPLEMENTED — all 5 slices done** (Designer role + DesignSpec/TestPlan;
+human gate + approved tests locked as the oracle; adversarial test review; **deterministic
+cross-document consistency linter + bounded design-heal**).
 **Pipeline reordered: Design runs BEFORE Planning** — a plan is the implementer's
 decomposition, not a gate before design, so a flaky/empty plan can no longer block
 the design. Plan-keyed complexity tiering was **removed** (it needed a plan in hand)
@@ -56,8 +57,12 @@ flowchart TD
     req["requirement (text)"] --> mode{"design.mode"}
     mode -->|off| plan["Planner → Coder (fast path)"]
     mode -->|auto / always| des["Designer (reasoner role)<br/>→ AD + Tech Spec per BC + TestPlan"]
-    des --> writet["write AD + Tech Specs + proposed tests<br/>into worktree (candidate oracle)"]
-    writet --> review["adversarial test review (advisory / strict)"]
+    des --> lint["deterministic design linter<br/>(cross-document contract consistency)"]
+    lint --> repair{"lint issues?"}
+    repair -->|"yes, repairs < budget"| revise["Designer.revise_design()<br/>→ corrected DesignSpec"]
+    revise --> lint
+    repair -->|"clean or budget spent"| writet["write AD + Tech Specs + proposed tests<br/>into worktree (candidate oracle)"]
+    writet --> review["contract-aware adversarial test review<br/>(advisory / strict; sees the contracts + lint findings)"]
     review --> gate{"ApprovalPort<br/>architect reviews design + tests"}
     gate -->|reject| blocked["BLOCKED — design recorded for revision"]
     gate -->|approve| lock["lock tests (protected_globs)"]
@@ -100,16 +105,23 @@ The saga briefly re-enters `PLANNING`: `INIT → PLANNING → DESIGNING → AWAI
 | Human review of design + tests | **`ApprovalPort` (M6)** — generalize from "deploy gate" to a typed gate (`design` / `deploy`) |
 | Agent-proposed tests become the oracle | **`protected_globs` + tests-as-oracle** (AD-11) — write proposed tests, then protect them |
 | Architecture intent enforced | **M4 ArchUnit dual gate** — the design's arch constraints can be emitted as rules |
-| Auditable artifacts | **append-only execution log** — `DESIGN_PROPOSED`, `DESIGN_APPROVED/REJECTED`, `TESTS_LOCKED` events |
+| Auditable artifacts | **append-only execution log** — `DESIGN_PROPOSED`, `DESIGN_LINT`, `DESIGN_REVISED`, `DESIGN_APPROVED/REJECTED`, `TESTS_LOCKED` events |
+| Design self-consistency without a model call | **deterministic linter** (`application/design_lint.py`, pure function over `DesignSpec`) — mirrors the "verifier deterministic-first" principle (`05-decisions.md`) |
+| Auto-revise an inconsistent design | **bounded design-heal** — same `generate_structured` + feedback loop the Coder's heal uses, keyed on the linter instead of a compiler error |
 
 ## New elements to add (when implemented)
 
-- **Port** `DesignPort` (outbound): `propose_design(requirement, repo_map) -> DesignSpec`.
+- **Port** `DesignPort` (outbound): `propose_design(requirement, repo_map) -> DesignSpec`
+  and `revise_design(requirement, repo_map, previous, issues, analysis) -> DesignSpec`
+  (design-heal).
 - **Adapter** `adapters/designer_llm.py` (`LLMDesigner`, reasoner role).
 - **Domain models**: `DesignSpec { summary, affected, interface_changes[], adr_notes, test_plan: ProposedTest[] }`, `ProposedTest { path, content, rationale }`.
+- **Consistency linter**: `application/design_lint.py` — `lint_design(spec) -> list[str]`
+  (pure, deterministic) + `render_contracts(spec)` (the per-context contracts digest fed
+  to the Reviewer and to `revise_design`).
 - **Session states**: `DESIGNING`, `AWAITING_APPROVAL` (+ transitions); `ApprovalPort.request_approval(kind, summary)` gains a `kind`.
-- **Config**: `design.mode = off | auto | always` in the Project Profile; `AICODER_DESIGN` env override; complexity heuristic (or Designer self-classifies) for `auto`.
-- **Orchestrator**: a `DESIGNING → approval → lock-tests → CODING` segment before the coding phase.
+- **Config**: `design.mode = off | auto | always` in the Project Profile; `AICODER_DESIGN` env override; complexity heuristic (or Designer self-classifies) for `auto`; `design.review_strict`; `design.max_design_repairs` (design-heal budget, default 1, 0 = off).
+- **Orchestrator**: a `DESIGNING → lint → (bounded heal) → review → approval → lock-tests → CODING` segment before the coding phase (`_repair_design`).
 
 ## Risks & mitigations
 
@@ -117,6 +129,7 @@ The saga briefly re-enters `PLANNING`: `INIT → PLANNING → DESIGNING → AWAI
 |---|---|
 | **Weak/wrong oracle** (agent writes easy tests, then passes them) | Human approves the **TEST CASES** specifically (the load-bearing gate). Optional **adversarial review** pass (second model / different role): "does this test actually constrain the requirement? edge cases? trivially-satisfiable?" before locking. |
 | **Design theater** (pretty prose, no constraint) | Keep prose minimal; the binding artifacts are the **executable tests + arch rules**, which the deterministic Verifier enforces. |
+| **Self-inconsistent multi-BC design** (a flow calls an undeclared method; a type has two owners; naming drift — the build can't compile no matter how good the Coder is) | **Deterministic design linter** (no LLM) cross-checks the contracts before the gate (undeclared-method-in-flow, conflicting arity across interfaces, type owned by ≥2 contexts / referenced with no shared-kernel decision, status-enum suffix drift); findings drive a **bounded design-heal** (Designer auto-revises) and, under `review_strict`, block. The **Reviewer now also sees the contracts**, not just the tests. Found on the Digital Library e2e run (3 BCs → `HEALING_FAILED` from duplicated `Copy`/`CopyStatus`). |
 | **Over-process** on small changes | **Tiering** — trivial tier skips design entirely (current path). |
 | **Bootstrapping** (who guards the guard?) | Human gate + the existing immutable audit log; tests, once locked, are uneditable by the Coder. |
 | **Latency/cost** | Extra reasoner passes only on the complex tier; reuse cached repo map. |
@@ -169,6 +182,40 @@ The saga briefly re-enters `PLANNING`: `INIT → PLANNING → DESIGNING → AWAI
    genuine weaknesses in a proposed AccountWithdrawTest (no balance-unchanged-after-
    exception check, missing zero/negative-amount cases, brittle message assertion)
    and surfaced them to the gate.
+
+5. **Slice 5 — Deterministic consistency linter + bounded design-heal — ✅ DONE.**
+   Motivated by the **Digital Library e2e run** (`examples/e2e-library-lending/`): the
+   design half scaled cleanly to **3 bounded contexts**, but the code half hit
+   `HEALING_FAILED` because the design was **internally self-contradictory** in ways no
+   Coder could fix — a key-flow called `CatalogService.setCopyStatus(...)` that no
+   interface declared, `Copy`/`CopyStatus` had no single owner (so the Coder re-created
+   them per package → `incomparable types`), and a status-enum suffix drifted
+   (`CopyStatus` vs `LoanState`). The adversarial Reviewer (Slice 4) could not catch any
+   of it — **it only saw the tests, never the contracts**. Three additions close the gap:
+   - **(linter)** `application/design_lint.py` — a **pure, deterministic** `lint_design`
+     cross-checks the `DesignSpec` for: L1 a method invoked in a key-flow that no
+     interface/aggregate declares; L2 the same method declared with conflicting arity
+     across two interface contracts; L3 a type owned by ≥2 contexts (L3a) or referenced
+     across a boundary with no shared-kernel / published-language decision (L3b); L4
+     status-enum suffix drift. No model call — consistent with the "verifier
+     deterministic-first" principle. Logs `DESIGN_LINT {ok, issues, repairs}`.
+   - **(design-heal)** the orchestrator's `_repair_design` hands any lint findings back to
+     the Designer's new `revise_design(...)` and re-lints, bounded by
+     `design.max_design_repairs` (default 1, 0 = off). Keyed on the **linter** (objective,
+     machine-checkable), not the advisory LLM review. Logs `DESIGN_REVISED` per attempt;
+     the architect then gates a design that is already consistent (or, if heal can't
+     converge, sees the residual issues). Under `review_strict`, a failed review **or** an
+     unresolved lint finding auto-blocks.
+   - **(contract-aware review)** `ReviewPort.review_tests(..., contracts="")` now receives
+     a per-context digest of the interfaces, invariants, domain model and key flows
+     (`render_contracts`), and the Reviewer prompt cross-checks the tests **against** the
+     contracts — undeclared calls, two-signature methods, types with no single owner —
+     instead of judging the tests in a vacuum. The Designer prompt also gained an explicit
+     **shared-kernel / one-signature / consistent-naming** section so the model avoids the
+     class up front. Unit-tested: `tests/test_design_lint.py` (each L-class + a clean
+     design + the service-vs-aggregate false-positive guard) and `tests/test_designer.py`
+     (lint logged + surfaced to the gate; strict block on lint; heal converges before the
+     gate; heal bounded then blocks; repairs disabled; Reviewer receives contracts).
 
 **Acceptance (e2e on the eval target):** given a non-trivial requirement, the agent
 produces a DesignSpec + proposed tests → a human approves → the tests are locked →
