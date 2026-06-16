@@ -72,6 +72,15 @@ class DesignPort(Protocol):
         Designer re-deriving "done" from the raw prose. None when analysis is off."""
         ...
 
+    def revise_design(
+        self, requirement: str, repo_map: str, previous: DesignSpec,
+        issues: list[str], analysis: AnalysisSpec | None = None,
+    ) -> DesignSpec:
+        """Design-heal (M07): re-emit a corrected DesignSpec resolving the deterministic
+        linter's cross-document consistency `issues`, keeping the same scope/contexts as
+        `previous`. Called by the orchestrator's bounded design-repair loop."""
+        ...
+
 
 @runtime_checkable
 class ReviewPort(Protocol):
@@ -79,7 +88,14 @@ class ReviewPort(Protocol):
     (M07 Slice 4). Ideally a DIFFERENT model from the Designer (diversity), so the
     designer can't rubber-stamp its own tests."""
 
-    def review_tests(self, requirement: str, design_summary: str, tests: list[str]) -> TestReview:
+    def review_tests(
+        self, requirement: str, design_summary: str, tests: list[str], contracts: str = ""
+    ) -> TestReview:
+        """`contracts` is a per-context digest of the binding interfaces, invariants,
+        domain model and key flows (see application.design_lint.render_contracts) so the
+        Reviewer can judge the tests AGAINST the contracts and catch cross-document
+        inconsistencies — a call to an undeclared method, a method with two signatures,
+        a type with no single owner — not just weaknesses internal to the tests."""
         ...
 
 

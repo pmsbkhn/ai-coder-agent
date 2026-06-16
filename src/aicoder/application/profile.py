@@ -64,6 +64,10 @@ class DesignConfig(BaseModel):
     # Slice 4: when true, a failed adversarial test review auto-blocks the run
     # (before the human gate). Default false = advisory (concerns surfaced to the human).
     review_strict: bool = False
+    # Design-heal: how many times the orchestrator may hand the deterministic linter's
+    # cross-document consistency findings back to the Designer to auto-revise BEFORE the
+    # gate (0 = off). Keyed on the linter (objective), not the advisory LLM review.
+    max_design_repairs: int = 1
     # Where the design artifacts (AD + one Tech Spec per bounded context) are written
     # in the target worktree, so they commit alongside the change.
     docs_dir: str = "docs/design"

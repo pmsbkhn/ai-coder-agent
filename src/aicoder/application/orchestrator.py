@@ -39,6 +39,7 @@ from aicoder.application.design_docs import (
     tech_spec_path,
     test_cases_path,
 )
+from aicoder.application.design_lint import lint_design, render_contracts
 from aicoder.application.profile import ProjectProfile
 from aicoder.application.tiering import estimate_complexity
 from aicoder.domain.errors import ToolInvocationError
@@ -255,6 +256,29 @@ class Orchestrator:
         self._log(session, "CLARIFICATION_REQUIRED", {"open_questions": spec.open_questions[:10]})
         return spec, False
 
+    def _repair_design(
+        self, session: AgentSession, spec, prompt: str, repo_map: str,
+        analysis: AnalysisSpec | None,
+    ):
+        """Bounded design-heal: while the deterministic linter finds cross-document
+        inconsistencies, hand them back to the Designer to revise — capped by
+        design.max_design_repairs. Returns (final_spec, remaining_issues, repairs_done).
+        Keyed on the linter (objective + machine-checkable), NOT the advisory LLM review.
+        A Designer adapter without revise support (or a transient failure) ends the loop
+        gracefully with whatever it has."""
+        issues = lint_design(spec)
+        budget = max(0, self._profile.design.max_design_repairs)
+        repairs = 0
+        while issues and repairs < budget:
+            self._log(session, "DESIGN_REVISED", {"attempt": repairs + 1, "fixing": issues[:10]})
+            try:
+                spec = self._designer.revise_design(prompt, repo_map, spec, issues, analysis)
+            except (AttributeError, NotImplementedError):
+                break  # Designer adapter does not support revision
+            repairs += 1
+            issues = lint_design(spec)
+        return spec, issues, repairs
+
     def _run_design(
         self, session: AgentSession, prompt: str, repo_map: str, workdir: str,
         applied: dict[str, str], analysis: AnalysisSpec | None = None,
@@ -282,6 +306,13 @@ class Orchestrator:
             return set(), True
 
         spec = self._designer.propose_design(prompt, repo_map, analysis)
+        # Deterministic design-heal (no LLM verdict): the linter checks cross-document
+        # contract consistency — an undeclared method called in a flow, a method with
+        # two signatures, a type with no single owner, naming drift — and hands any
+        # findings back to the Designer to auto-revise (bounded), so the architect gates
+        # a consistent design rather than the build failing later. Runs in all paths.
+        spec, lint_issues, repairs = self._repair_design(
+            session, spec, prompt, repo_map, analysis)
         if analysis is not None:
             self._log(session, "DESIGN_TRACE", {
                 "from": "analysis",
@@ -297,24 +328,37 @@ class Orchestrator:
             "bounded_contexts": spec.bounded_contexts,
             "docs": docs,
             "proposed_tests": [t.path for t in spec.executable_tests()],
+            "repairs": repairs,
         })
+        self._log(session, "DESIGN_LINT",
+                  {"ok": not lint_issues, "issues": lint_issues[:10], "repairs": repairs})
+
         if self._approval is None:
             return set(), True  # Slice-1 behavior: AD + Tech Specs written + logged, not gated
 
-        # Slice 4: adversarial review of the proposed tests BEFORE locking. Advisory
-        # by default (concerns surfaced to the architect); review_strict auto-blocks.
+        # Slice 4: adversarial review of the proposed tests BEFORE locking — now also
+        # handed the contracts (design_lint.render_contracts) so it judges the tests
+        # against the interfaces/domain model, not in a vacuum. Advisory by default
+        # (concerns surfaced to the architect); review_strict auto-blocks.
         review = None
         if self._reviewer is not None:
             review = self._reviewer.review_tests(
                 prompt, spec.summary,
                 [f"{t.id} [{t.title}] {t.spec}\n{t.content}".strip() for t in spec.all_tests()],
+                contracts=render_contracts(spec),
             )
             self._log(session, "TEST_REVIEW", {"ok": review.ok, "concerns": review.concerns[:10]})
-            if not review.ok and self._profile.design.review_strict:
-                self._log(session, "DESIGN_REJECTED",
-                          {"reason": "failed adversarial test review", "concerns": review.concerns[:10]})
-                session.transition_to(SessionState.BLOCKED)  # from PLANNING
-                return set(), False
+
+        # Strict design gate: a failed adversarial review OR any deterministic lint
+        # finding auto-blocks before the human gate (both are advisory when not strict).
+        review_failed = review is not None and not review.ok
+        if self._profile.design.review_strict and (review_failed or lint_issues):
+            self._log(session, "DESIGN_REJECTED",
+                      {"reason": "design consistency gate",
+                       "concerns": (review.concerns[:10] if review else []),
+                       "lint_issues": lint_issues[:10]})
+            session.transition_to(SessionState.BLOCKED)  # from PLANNING
+            return set(), False
 
         # Write the executable proposed tests (spec-only fitness cases write no file),
         # then gate on the ARCHITECT before locking them.
@@ -328,10 +372,12 @@ class Orchestrator:
         concerns = review.concerns[:10] if review else []
         self._log(session, "APPROVAL_REQUESTED",
                   {"action": "architect_review", "docs": docs,
-                   "tests": sorted(locked), "review_concerns": concerns})
+                   "tests": sorted(locked), "review_concerns": concerns,
+                   "lint_issues": lint_issues[:10]})
         summary = (f"architect review — {len(spec.tech_specs)} tech spec(s) across "
                    f"{spec.bounded_contexts}; {len(locked)} test(s)"
-                   + (f"; {len(concerns)} review concern(s)" if concerns else ""))
+                   + (f"; {len(concerns)} review concern(s)" if concerns else "")
+                   + (f"; {len(lint_issues)} lint issue(s)" if lint_issues else ""))
         if self._approval.request_approval("design", summary):
             self._log(session, "DESIGN_APPROVED", {"docs": docs, "locked_tests": sorted(locked)})
             session.resume_planning()  # AWAITING_APPROVAL -> PLANNING (decompose the design)
