@@ -412,9 +412,9 @@ def test_design_heal_is_bounded_then_blocks_when_unfixed() -> None:
     designer = FakeDesigner(_INCONSISTENT_DESIGN)  # revise returns the same → never converges
     session = _heal_orch(designer, _strict_profile(), mem).run_requirement("x")
     assert session.state is SessionState.BLOCKED
-    assert designer.revise_calls == 1              # capped by max_design_repairs (default 1)
+    assert designer.revise_calls == 2              # capped by max_design_repairs (default 2)
     events = [t.event_type for t in mem.get_traces(session.session_id)]
-    assert events.count("DESIGN_REVISED") == 1 and "DESIGN_REJECTED" in events
+    assert events.count("DESIGN_REVISED") == 2 and "DESIGN_REJECTED" in events
 
 
 def test_design_repairs_can_be_disabled() -> None:

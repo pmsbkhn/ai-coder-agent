@@ -65,9 +65,12 @@ class DesignConfig(BaseModel):
     # (before the human gate). Default false = advisory (concerns surfaced to the human).
     review_strict: bool = False
     # Design-heal: how many times the orchestrator may hand the deterministic linter's
-    # cross-document consistency findings back to the Designer to auto-revise BEFORE the
-    # gate (0 = off). Keyed on the linter (objective), not the advisory LLM review.
-    max_design_repairs: int = 1
+    # cross-document consistency + oracle/traceability findings back to the Designer to
+    # auto-revise BEFORE the gate (0 = off). Keyed on the linter (objective), not the
+    # advisory LLM review. Default 2: a multi-bounded-context design often surfaces several
+    # findings at once (a misfiled case + an inverted arrow + a spec-only happy path), and
+    # one revise pass rarely clears them all — the loop re-lints and stops early when clean.
+    max_design_repairs: int = 2
     # Where the design artifacts (AD + one Tech Spec per bounded context) are written
     # in the target worktree, so they commit alongside the change.
     docs_dir: str = "docs/design"

@@ -135,3 +135,199 @@ def test_render_contracts_includes_interfaces_and_flows() -> None:
     assert "## Catalog" in out and "## Lending" in out
     assert "CatalogService" in out and "isOverdue" in out
     assert "Key flows:" in out and "setCopyStatus" in out
+
+
+# --------------------------------------------------------------------------- #
+# L5–L7: oracle & traceability quality (separate from code-build consistency)
+# --------------------------------------------------------------------------- #
+
+def _domain_case(id_: str, path: str = "", content: str = "x") -> dict:
+    return {"id": id_, "title": id_, "kind": "domain",
+            "spec": "given x when y then z", "path": path,
+            "content": content if path else ""}
+
+
+# A clean two-context design: arrows follow ownership, each context owns its own cases,
+# every domain case ships an executable oracle. Must lint clean (false-positive guard).
+_CLEAN_MULTI = {
+    "summary": "Lending borrows Catalog copies.",
+    "decisions": ["Catalog owns Copy via a shared kernel; Lending references it."],
+    "context_map": "graph TD\n  Lending -->|uses| Catalog",
+    "tech_specs": [
+        {
+            "bounded_context": "Catalog", "summary": "Copies.",
+            "affected": ["src/main/java/lib/catalog/Copy.java"],
+            "domain_model": "classDiagram\n class Copy { +borrow() }",
+            "test_plan": [_domain_case(
+                "TC-CAT-01", "src/test/java/lib/catalog/CopyTest.java")],
+        },
+        {
+            "bounded_context": "Lending", "summary": "Loans use Copy.",
+            "affected": ["src/main/java/lib/lending/Loan.java"],
+            "interface_changes": ["interface LendingService { Loan borrow(UUID copyId); }"],
+            # references Copy (owned by Catalog) without re-declaring it
+            "domain_model": "classDiagram\n class Loan { +copyId }\n Loan ..> Copy : borrows",
+            "test_plan": [_domain_case(
+                "TC-LEN-01", "src/test/java/lib/lending/LoanTest.java")],
+        },
+    ],
+}
+
+
+def test_clean_multicontext_lints_clean() -> None:
+    assert _issues(_CLEAN_MULTI) == []
+
+
+def test_l5_flags_case_filed_under_wrong_context_by_path() -> None:
+    spec = {
+        "summary": "x", "decisions": ["shared kernel"],
+        "tech_specs": [
+            {"bounded_context": "Catalog", "summary": "c",
+             "affected": ["catalog/Copy.java"],
+             "test_plan": [
+                 _domain_case("TC-CAT-01", "src/test/java/lib/catalog/CopyTest.java"),
+                 # a Membership case dumped into the Catalog test_plan
+                 _domain_case("TC-MEM-01", "src/test/java/lib/membership/MemberTest.java"),
+             ]},
+            {"bounded_context": "Membership", "summary": "m",
+             "affected": ["membership/Member.java"],
+             "test_plan": [_domain_case(
+                 "TC-MEM-02", "src/test/java/lib/membership/MemberStatusTest.java")]},
+        ],
+    }
+    found = _issues(spec)
+    assert any(i.startswith("L5") and "TC-MEM-01" in i and "Membership" in i for i in found)
+    # the correctly-filed cases are not flagged
+    assert not any(i.startswith("L5") and "TC-CAT-01" in i for i in found)
+    assert not any(i.startswith("L5") and "TC-MEM-02" in i for i in found)
+
+
+def test_l5_flags_by_tc_code_when_no_path() -> None:
+    spec = {
+        "summary": "x", "decisions": ["shared kernel"],
+        "tech_specs": [
+            {"bounded_context": "Catalog", "summary": "c",
+             "affected": ["catalog/Copy.java"],
+             "test_plan": [{"id": "TC-LEN-09", "kind": "domain",
+                            "spec": "s", "path": "", "content": ""}]},
+            {"bounded_context": "Lending", "summary": "l",
+             "affected": ["lending/Loan.java"], "test_plan": []},
+        ],
+    }
+    assert any(i.startswith("L5") and "TC-LEN-09" in i and "Lending" in i
+               for i in _issues(spec))
+
+
+def test_l6a_flags_domain_case_without_executable_oracle() -> None:
+    spec = {
+        "summary": "x", "decisions": ["shared kernel"],
+        "tech_specs": [{"bounded_context": "Catalog", "summary": "c",
+                        "affected": ["catalog/Copy.java"],
+                        "test_plan": [_domain_case("TC-CAT-01")]}],  # no path/content
+    }
+    assert any(i.startswith("L6") and "TC-CAT-01" in i for i in _issues(spec))
+
+
+def test_l6a_not_flagged_for_spec_only_fitness_case() -> None:
+    spec = {
+        "summary": "x", "decisions": ["shared kernel"],
+        "tech_specs": [{"bounded_context": "Catalog", "summary": "c",
+                        "affected": ["catalog/Copy.java"],
+                        "test_plan": [{"id": "TC-FIT-01", "kind": "fitness",
+                                       "spec": "domain must not import adapters",
+                                       "path": "", "content": ""}]}],
+    }
+    assert not any(i.startswith("L6") for i in _issues(spec))
+
+
+def test_l6b_flags_context_with_empty_test_plan() -> None:
+    spec = {
+        "summary": "x", "decisions": ["shared kernel"],
+        "tech_specs": [
+            {"bounded_context": "Catalog", "summary": "c",
+             "affected": ["catalog/Copy.java"],
+             "test_plan": [_domain_case(
+                 "TC-CAT-01", "src/test/java/lib/catalog/CopyTest.java")]},
+            {"bounded_context": "Lending", "summary": "l",
+             "affected": ["lending/Loan.java"], "test_plan": []},  # empty
+        ],
+    }
+    found = _issues(spec)
+    assert any(i.startswith("L6") and "Lending" in i and "empty test_plan" in i
+               for i in found)
+    assert not any(i.startswith("L6") and "Catalog" in i and "empty" in i for i in found)
+
+
+def test_l7_flags_inverted_context_map_arrow() -> None:
+    spec = {
+        "summary": "x", "decisions": ["Catalog owns Copy (shared kernel)."],
+        # WRONG: drawn Catalog --> Lending, but Lending is the one that uses Copy
+        "context_map": "graph TD\n  Catalog -->|uses| Lending",
+        "tech_specs": [
+            {"bounded_context": "Catalog", "summary": "c",
+             "affected": ["catalog/Copy.java"],
+             "domain_model": "classDiagram\n class Copy"},
+            {"bounded_context": "Lending", "summary": "l",
+             "affected": ["lending/Loan.java"],
+             "domain_model": "classDiagram\n class Loan\n Loan --> Copy : borrows"},
+        ],
+    }
+    assert any(i.startswith("L7") and "Catalog --> Lending" in i for i in _issues(spec))
+
+
+def test_l7_not_flagged_when_arrow_follows_dependency() -> None:
+    # _CLEAN_MULTI draws Lending --> Catalog (correct) → no L7
+    assert not any(i.startswith("L7") for i in _issues(_CLEAN_MULTI))
+
+
+# L8 — locked test invokes an operation the design never declares.
+_L8_BASE = {
+    "summary": "x", "decisions": ["shared kernel"],
+    "tech_specs": [{
+        "bounded_context": "Lending", "summary": "l",
+        "affected": ["lending/Loan.java"],
+        "interface_changes": ["interface BorrowService { Loan borrow(UUID copyId); }"],
+        "domain_model": "classDiagram\n class Loan { +borrow() }",
+        "key_flows": "sequenceDiagram\n  Repo->>Svc: save(loan)",
+    }],
+}
+
+
+def _with_test(content: str) -> dict:
+    spec = {**_L8_BASE}
+    spec["tech_specs"] = [{**_L8_BASE["tech_specs"][0], "test_plan": [
+        {"id": "TC-LEN-01", "kind": "domain", "spec": "s",
+         "path": "src/test/java/lib/lending/LoanTest.java", "content": content}]}]
+    return spec
+
+
+def test_l8_flags_undeclared_method_called_by_oracle() -> None:
+    # `findAllCopies` is declared nowhere → flag; `borrow` and `save` are published.
+    content = (
+        "var loan = service.borrow(copyId);\n"
+        "var copies = bookRepo.findAllCopies();\n"
+    )
+    found = _issues(_with_test(content))
+    assert any(i.startswith("L8") and "findAllCopies" in i for i in found)
+    assert not any(i.startswith("L8") and "borrow" in i for i in found)
+
+
+def test_l8_ignores_getters_asserts_and_jdk_calls() -> None:
+    # getStatus (getter), assertEquals (static, no receiver), Clock.fixed / Instant.parse
+    # / plusDays (JDK), List.get — none are design operations → no L8 noise.
+    content = (
+        "var c = Clock.fixed(Instant.parse(\"2024-01-01T10:00:00Z\"), ZoneOffset.UTC);\n"
+        "assertEquals(CopyStatus.AVAILABLE, copy.getStatus());\n"
+        "var due = loanDate.plusDays(14);\n"
+        "var first = repo.findAll().get(0);\n"  # findAll is undeclared → the ONLY flag
+        "service.borrow(copyId);\n"
+    )
+    found = [i for i in _issues(_with_test(content)) if i.startswith("L8")]
+    assert any("findAll(" in i for i in found)
+    assert not any("getStatus" in i or "fixed" in i or "parse" in i
+                   or "plusDays" in i or "assertEquals" in i for i in found)
+
+
+def test_l8_clean_when_oracle_uses_only_published_api() -> None:
+    content = "var loan = service.borrow(copyId);\nrepo.save(loan);\n"
+    assert not any(i.startswith("L8") for i in _issues(_with_test(content)))
