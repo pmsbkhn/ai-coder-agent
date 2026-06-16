@@ -43,3 +43,14 @@ healing:
   max_attempts: 6                        # Circuit Breaker N (TC-CORE-06)
   reset_to_clean: true                   # each attempt starts from a clean worktree
   no_progress_breaker: true              # trip early if the error signature repeats
+
+# Framework DESIGN conventions — reusable MSFW domain primitives the Analyst and
+# Designer must PREFER over re-inventing (prompt-level guidance; deterministic
+# enforcement stays in the ArchUnit/MsfwFitness gate above). Source: global house rules.
+conventions:
+  - "Identities: a String identity extends tech.vsf.ptnt.msfw.domain.core.StringIdentity (one-liner: `final class FooId extends StringIdentity { FooId(String v){ super(v); } }`). NEVER hand-roll Identity<String> with its own value field + equals/hashCode, and do NOT invent an IdGeneratorPort or call UUID.randomUUID in the domain — StringIdentity supplies value()/equals/hashCode/toString, a non-blank guard, and type-strict equality."
+  - "Idempotency / client correlation tokens: reuse tech.vsf.ptnt.msfw.domain.core.IdempotencyKey (a StringIdentity); do not define a local one."
+  - "Validation / guards throw tech.vsf.ptnt.msfw.exception.InvalidArgumentException (maps to HTTP 400) — NOT IllegalArgumentException, and do NOT invent a per-context DomainException / DomainErrorCode hierarchy."
+  - "Money / Currency: reuse domain.type.Money (BigDecimal) + domain.type.Currency where the context calls for it; do not silently introduce a parallel money type."
+  - "Sagas / process managers: use the domain.saga package (Saga, SagaStatus, SagaManager, SagaLifecycle) rather than hand-rolling a state enum + transition logic."
+  - "Shared identifiers/types live in the shared kernel and are referenced by contexts; the shared kernel is a shared MODULE, never a bounded context of its own."

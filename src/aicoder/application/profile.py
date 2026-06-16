@@ -103,6 +103,16 @@ class ProjectProfile(BaseModel):
     # immutable oracle: the agent implements code to pass them, can't edit them.
     # Empty (default) = no restriction, so non-eval profiles behave unchanged.
     protected_globs: list[str] = Field(default_factory=list)
+    # Stack/framework DESIGN conventions — reusable domain primitives and house
+    # rules the Analyst and Designer must PREFER over re-inventing (e.g. MSFW's
+    # StringIdentity for ids, IdempotencyKey, domain.type.Money, the
+    # InvalidArgumentException -> HTTP 400 mapping, the domain.saga package). Each
+    # entry is one rule, injected verbatim into the Analyst/Designer system prompt so
+    # the design reuses framework types instead of churning ad-hoc ones (an
+    # IdGeneratorPort, a per-context DomainException). Empty (default) = generic
+    # behavior, so framework-free profiles are unchanged. This is prompt-level
+    # guidance only; deterministic enforcement stays in the ArchUnit/fitness gate.
+    conventions: list[str] = Field(default_factory=list)
 
 
 def load_profile(path: str | Path) -> ProjectProfile:

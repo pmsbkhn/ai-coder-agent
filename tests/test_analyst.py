@@ -210,3 +210,31 @@ def test_auto_runs_analysis_on_complex_requirement() -> None:
     assert session.state is SessionState.DONE
     assert analyst.calls == 1
     assert "ANALYSIS_DONE" in _events(mem, session.session_id)
+
+
+# --- Framework conventions injected from the Profile (MSFW primitives) ---------- #
+
+class _RecordingLLM:
+    model = "fake"
+
+    def __init__(self) -> None:
+        self.system = ""
+
+    def complete_json(self, *, system, user, json_schema, tool_name="emit") -> dict:
+        self.system = system
+        return _CLEAR
+
+    def complete_text(self, *, system, user, max_tokens=2048) -> str:  # pragma: no cover
+        return ""
+
+
+def test_analyst_injects_profile_conventions_into_system_prompt() -> None:
+    llm = _RecordingLLM()
+    LLMAnalyst(llm, _PROFILE).analyze("manage accounts", "repo-map")
+    assert "Framework conventions" in llm.system and "StringIdentity" in llm.system
+
+
+def test_analyst_no_conventions_section_when_profile_lists_none() -> None:
+    llm = _RecordingLLM()
+    LLMAnalyst(llm, _PROFILE.model_copy(update={"conventions": []})).analyze("x", "repo-map")
+    assert "Framework conventions" not in llm.system
