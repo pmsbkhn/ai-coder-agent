@@ -46,3 +46,40 @@ def test_read_missing_file(repo) -> None:
     ws = git_server.start_task("feature/empty")
     assert git_server.read_file(ws["worktree"], "nope.java") == {"exists": False, "content": ""}
     git_server.cleanup_task(ws["worktree"])
+
+
+def test_start_task_reuses_live_worktree(repo) -> None:
+    # in-run idempotency: a second start_task for the same branch reuses the dir.
+    a = git_server.start_task("feature/sess_x")
+    b = git_server.start_task("feature/sess_x")
+    assert a["ok"] and b["ok"]
+    assert a["worktree"] == b["worktree"] and b["reused"] is True
+    git_server.cleanup_task(a["worktree"])
+
+
+def test_start_task_recovers_when_branch_exists_but_worktree_gone(repo) -> None:
+    # the deterministic-session-id re-run: branch `feature/sess_y` survives a prior
+    # run but its worktree was removed. start_task must NOT fail with
+    # "a branch named ... already exists" — it attaches the branch to a fresh worktree.
+    first = git_server.start_task("feature/sess_y")
+    git_server.cleanup_task(first["worktree"])  # remove the worktree, branch stays
+    _git(["branch", "--list", "feature/sess_y"], repo)  # (branch still present)
+
+    again = git_server.start_task("feature/sess_y")
+    assert again["ok"], again
+    assert again["worktree"] and (repo.parent / ".aicoder-worktrees").exists()
+    # the worktree is usable
+    git_server.write_file(again["worktree"], "A.java", "class A {}")
+    assert git_server.read_file(again["worktree"], "A.java")["exists"]
+    git_server.cleanup_task(again["worktree"])
+
+
+def test_start_task_clears_stale_non_worktree_dir(repo) -> None:
+    # a leftover directory at the worktree path that is NOT a registered worktree
+    # (e.g. files left by a killed run) must be cleared, not cause a failure.
+    wt = git_server._worktree_dir("feature/sess_z")
+    wt.mkdir(parents=True)
+    (wt / "junk.txt").write_text("leftover", encoding="utf-8")
+    ws = git_server.start_task("feature/sess_z")
+    assert ws["ok"] and (wt / ".git").exists()
+    git_server.cleanup_task(ws["worktree"])
