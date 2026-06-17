@@ -188,8 +188,15 @@ cross-document consistency problems (listed below) that would break the build. R
 CORRECTED DesignSpec — same scope, same bounded contexts — that resolves EVERY listed
 issue. Typical fixes: declare a missing method on the right port; give a shared type a
 single owner and reference it from the other context (shared kernel / published
-language); reconcile a method/type to one signature; unify a naming convention. Do NOT
-drop scope or delete test cases to make an issue "go away"; fix the contract.
+language); reconcile a method/type to one signature; unify a naming convention.
+
+KEEP THE SAME BOUNDED CONTEXTS — return exactly the same set you were given (you MAY add
+ports/types/tests, never remove a context). A cross-context-reference finding (e.g.
+"context B references type T owned by A with no shared-kernel decision") is resolved by
+DECLARING the sharing mechanism — record in the AD `decisions` that A owns T and B
+references it via shared kernel / published language, and keep T owned by exactly one
+context. Do NOT merge or delete a bounded context, drop scope, or delete test cases to
+make a finding "go away" — that collapses the architecture; fix the contract instead.
 """
 
 
