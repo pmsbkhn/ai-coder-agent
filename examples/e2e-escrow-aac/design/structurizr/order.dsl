@@ -1,0 +1,16 @@
+# Components for bounded context: Order
+# Included by workspace.dsl into the `order` container.
+order_orderrepository = component "OrderRepository" "outbound port" "port.out"
+order_placeorderusecase = component "PlaceOrderUseCase" "inbound use-case port" "port.in"
+order_money = component "Money" "aggregate / value object" "domain"
+order_order = component "Order" "aggregate / value object" "domain"
+order_orderid = component "OrderId" "aggregate / value object" "domain"
+order_orderstatus = component "OrderStatus" "aggregate / value object" "domain"
+order_placeorderusecase -> order_money "handles"
+order_placeorderusecase -> order_order "handles"
+order_placeorderusecase -> order_orderid "handles"
+order_placeorderusecase -> order_orderstatus "handles"
+order_money -> order_orderrepository "persists via"
+order_order -> order_orderrepository "persists via"
+order_orderid -> order_orderrepository "persists via"
+order_orderstatus -> order_orderrepository "persists via"
