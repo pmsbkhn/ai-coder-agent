@@ -146,6 +146,16 @@ Run: `uv run python eval/run_eval.py [--suite lite|msfw] [--repeat N] [--timeout
     sections omitted). Example intake: `examples/requirements/order-note.yaml`. Tests: `tests/test_requirement_spec.py`,
     `test_design_traceability.py`, `test_event_flow.py`, `test_integration_design.py`. **NOTE: not yet run on a dev box
     with the toolchain — `py_compile` clean only; run `uv run pytest` + `uv run lint-imports` to confirm green.**
+  - **Design-loop memory hardening** (same cycle): the analysis/design flow is STATELESS + forward-passing (each phase
+    rebuilds its prompt from validated objects — no growing conversation to forget), with the deterministic linter as the
+    real anti-forgetting backstop (it CHECKS, never relies on recall). Two concrete gaps closed: (1) `render_contracts`
+    (the digest the design-heal `revise_design` sees INSTEAD of the full prior DesignSpec) now names every droppable
+    element — event flow, integration contracts, test→requirement traces (ids only, no bodies), and a system block for
+    relationships/sagas/use-cases/glossary — so a revise can't silently drop them; (2) a prompt-budget guard
+    (`adapters/llm/budget.py`) logs a loud WARNING when `system+schema+user` likely exceeds the model's window instead of
+    letting the provider truncate silently (the model would "forget" the contract with no error). Clients expose
+    `context_tokens` (Ollama 4096 default — the footgun; Anthropic 200k; unknown ⇒ no guard). Tests: `test_render_contracts`,
+    `test_llm_budget`. Still open (long-term): wire RAG into the loop (AD-12) to recall past designs/decisions.
 - **Eval suites + leaderboard DONE** (see the Eval harness section): lite 3/3, msfw 1/2, per-model leaderboard +
   `--repeat` reliability. More golden tasks (event-sourcing, bugfix, budget-stressing) remain a nice-to-have.
 - **M5**: **PR/delivery flow DONE** — git server `push` + `open_pr` (via `gh`); orchestrator runs a
