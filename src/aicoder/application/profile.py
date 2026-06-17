@@ -113,6 +113,14 @@ class ProjectProfile(BaseModel):
     # behavior, so framework-free profiles are unchanged. This is prompt-level
     # guidance only; deterministic enforcement stays in the ArchUnit/fitness gate.
     conventions: list[str] = Field(default_factory=list)
+    # A concrete WORKED hexagonal exemplar for ONE bounded context (free text) —
+    # the canonical port.in (use-case) / domain aggregate / port.out (repository,
+    # with EVERY finder the tests call) / adapter layout the Designer should pattern
+    # each context on. Injected into the Designer system prompt so per-domain designs
+    # are complete and idiomatic (closes the L1/L8 "test calls an undeclared port
+    # method" gap). Empty (default) = generic behavior, framework-free profiles
+    # unchanged. Prompt-level guidance only.
+    design_exemplar: str = ""
 
 
 def load_profile(path: str | Path) -> ProjectProfile:

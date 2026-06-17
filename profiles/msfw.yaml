@@ -54,3 +54,30 @@ conventions:
   - "Money / Currency: reuse domain.type.Money (BigDecimal) + domain.type.Currency where the context calls for it; do not silently introduce a parallel money type."
   - "Sagas / process managers: use the domain.saga package (Saga, SagaStatus, SagaManager, SagaLifecycle) rather than hand-rolling a state enum + transition logic."
   - "Shared identifiers/types live in the shared kernel and are referenced by contexts; the shared kernel is a shared MODULE, never a bounded context of its own."
+
+# A worked hexagonal exemplar for ONE bounded context — the Designer patterns each
+# context on this shape and enumerates ports the same way (closes the L1/L8
+# "test calls an undeclared port method" gap). Prompt-level guidance only.
+design_exemplar: |
+  Package shape for a context `catalog` (mirror per context):
+    catalog/domain/model/      aggregates + value objects (ids extend StringIdentity)
+    catalog/domain/port/in/    inbound USE-CASE interfaces (what callers may invoke)
+    catalog/domain/port/out/   outbound REPOSITORY/GATEWAY interfaces
+    catalog/application/       use-case implementations (domain services)
+    catalog/adapters/inmemory/ outbound adapter implementations
+
+  Worked contract (Catalog) — declare ALL of these in `interface_changes`:
+    port/in:  interface AddCopyUseCase { CopyId addCopy(BookId bookId); }
+    port/in:  interface RegisterBookUseCase { BookId registerBook(String isbn, String title); }
+    port/out: interface BookRepository {
+                void save(Book book);
+                Optional<Book> findById(BookId id);
+                Optional<Book> findByIsbn(String isbn);
+                BookCopy findCopy(CopyId id);      // a finder a test calls -> declared here
+                List<BookCopy> findAllCopies();    // ditto
+              }
+    domain:   class BookCopy { CopyStatus status; void borrow(); void returnToShelf(); }
+
+  RULE shown by this example: EVERY method a key-flow or a locked test invokes
+  (bookRepo.findAllCopies(), service.addCopy(...)) appears on one of the port
+  interfaces above. No method is used without being declared.

@@ -613,7 +613,24 @@ def test_designer_injects_profile_conventions_into_system_prompt() -> None:
 
 
 def test_designer_no_conventions_section_when_profile_lists_none() -> None:
-    prof = _PROFILE.model_copy(update={"conventions": []})
+    prof = _PROFILE.model_copy(update={"conventions": [], "design_exemplar": ""})
     llm = _RecordingLLM()
     LLMDesigner(llm, prof).propose_design("add a note", "repo-map")
     assert "Framework conventions" not in llm.system  # framework-free profiles unchanged
+    assert "Reference hexagonal layout" not in llm.system
+
+
+def test_designer_injects_hexagonal_exemplar() -> None:
+    assert _PROFILE.design_exemplar, "msfw profile should define a hexagonal exemplar"
+    llm = _RecordingLLM()
+    LLMDesigner(llm, _PROFILE).propose_design("add a note", "repo-map")
+    assert "Reference hexagonal layout" in llm.system
+    assert "findAllCopies" in llm.system  # the worked port contract reached the prompt
+
+
+def test_designer_prompt_carries_completeness_rule() -> None:
+    # the closure/enumerate-ports rule is static (framework-agnostic) — always present
+    llm = _RecordingLLM()
+    LLMDesigner(llm, _PROFILE.model_copy(update={"conventions": [], "design_exemplar": ""})
+                ).propose_design("x", "repo-map")
+    assert "CLOSURE RULE" in llm.system and "ENUMERATE EVERY PORT" in llm.system

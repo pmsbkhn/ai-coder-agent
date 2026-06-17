@@ -98,6 +98,21 @@ Include at least the relevant domain-invariant cases for every invariant you lis
   (`DomainException` + its `DomainErrorCode`/`getErrorCode()`) is cross-cutting: give it a
   single declared owner (shared kernel) and reference it from there, never per context.
 
+## Hexagonal contract completeness (this is what makes a design compile)
+Design each bounded context as a complete hexagon, then make the tests/flows use ONLY
+what you declared:
+- ENUMERATE EVERY PORT. For each context list, in `interface_changes`, the full inbound
+  use-case port(s) AND the full outbound port(s) (repository / gateway) with COMPLETE
+  method signatures — including every lookup the tests need (`findById`, `findAll`,
+  `findFirstActiveBy…`, `save`, `delete`). A repository the tests call MUST appear here.
+- CLOSURE RULE: every method invoked in a `key_flows` sequence OR in a locked test's
+  `content` MUST resolve to a method you declared on a port (inbound/outbound) or as a
+  verb on an aggregate in `domain_model`. If a test calls `bookRepo.findAllCopies()`,
+  declare `findAllCopies()` on the repository port — do NOT leave the Coder to invent it.
+- SELF-CHECK before returning: re-read each test's `content` and each `key_flows`; for
+  every `x.method(...)` you wrote, confirm `method` is declared. If not, add it to the
+  right port (or drop the call). This single pass eliminates most build-breaking gaps.
+
 ## Cross-context consistency (multi-bounded-context designs)
 A design spanning several bounded contexts MUST be internally consistent, or the
 implementation cannot compile no matter how good the coder is. Enforce:
@@ -145,18 +160,26 @@ drop scope or delete test cases to make an issue "go away"; fix the contract.
 
 
 def _conventions_section(profile: ProjectProfile) -> str:
-    """Stack/framework design conventions from the profile (e.g. MSFW domain
-    primitives) — appended to the system prompt so the Designer REUSES framework
-    types instead of re-inventing ids / exceptions / money per context. Empty when
-    the profile lists none, so framework-free profiles are unchanged."""
+    """Stack/framework guidance from the profile, appended to the Designer system
+    prompt: (1) `conventions` — reusable domain primitives to PREFER over re-inventing
+    ids/exceptions/money; (2) `design_exemplar` — a worked hexagonal layout to pattern
+    each context on (closes the L1/L8 undeclared-port-method gap). Each is independent;
+    empty parts are omitted, so framework-free profiles are unchanged."""
+    parts: list[str] = []
     rules = getattr(profile, "conventions", None) or []
-    if not rules:
-        return ""
-    body = "\n".join(f"- {r}" for r in rules)
-    return (
-        "\n\n## Framework conventions (PREFER these reusable primitives — do not "
-        "re-invent them per context)\n" + body
-    )
+    if rules:
+        body = "\n".join(f"- {r}" for r in rules)
+        parts.append(
+            "\n\n## Framework conventions (PREFER these reusable primitives — do not "
+            "re-invent them per context)\n" + body
+        )
+    exemplar = (getattr(profile, "design_exemplar", "") or "").strip()
+    if exemplar:
+        parts.append(
+            "\n\n## Reference hexagonal layout (pattern EACH bounded context on this — "
+            "same package shape, ports enumerated the same way)\n" + exemplar
+        )
+    return "".join(parts)
 
 
 def _format_analysis(analysis: AnalysisSpec) -> str:
