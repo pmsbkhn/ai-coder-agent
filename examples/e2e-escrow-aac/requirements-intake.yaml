@@ -1,0 +1,71 @@
+meta:
+  title: "Marketplace escrow payments core"
+
+stories:
+  - id: US-01
+    title: "Seller onboarding"
+    as_a: "marketplace operator"
+    i_want: "register sellers with a basic profile"
+    so_that: "orders can be attributed and paid out to a known seller"
+    priority: High
+    acceptance:
+      - id: AC-01
+        given: "a new seller email and display name"
+        when: "the seller is registered"
+        then: "a seller is created in ACTIVE status and a seller identity is returned"
+      - id: AC-02
+        given: "an email already used by an existing seller"
+        when: "registration is attempted again"
+        then: "it is rejected and no new seller is created"
+  - id: US-02
+    title: "Place an order"
+    as_a: "buyer"
+    i_want: "place an order for an amount against a seller"
+    so_that: "I can purchase goods"
+    priority: High
+    acceptance:
+      - id: AC-03
+        given: "an active seller and a positive amount"
+        when: "an order is placed"
+        then: "an order is created in PLACED status with an order identity and the amount"
+      - id: AC-04
+        given: "an amount that is zero or negative"
+        when: "an order is placed"
+        then: "it is rejected and no order is created"
+  - id: US-03
+    title: "Escrow settlement"
+    as_a: "marketplace operator"
+    i_want: "hold an order's funds in escrow and settle them on completion or cancellation"
+    so_that: "buyers and sellers are protected until the order resolves"
+    priority: High
+    acceptance:
+      - id: AC-05
+        given: "an order that has just been placed"
+        when: "escrow is opened for the order"
+        then: "an escrow is created holding the order amount in PENDING status"
+      - id: AC-06
+        given: "a PENDING escrow whose order is completed"
+        when: "the escrow is released"
+        then: "the escrow moves to RELEASED and the held amount is credited to the seller"
+      - id: AC-07
+        given: "a PENDING escrow whose order is cancelled"
+        when: "the escrow is refunded"
+        then: "the escrow moves to REFUNDED and the held amount is returned to the buyer"
+      - id: AC-08
+        given: "an escrow that is not in PENDING status"
+        when: "a release is attempted"
+        then: "it is rejected and the escrow status is unchanged"
+
+nfrs:
+  - id: NFR-01
+    category: Performance
+    metric: "p95 < 200ms for an escrow state transition"
+    measurement: "in-process domain-service benchmark"
+    source: "US-03"
+    scope: "BC-Escrow"
+  - id: NFR-02
+    category: Reliability
+    metric: "escrow release/refund is idempotent on retry (no double settlement)"
+    measurement: "replay the same settlement command twice in a unit test"
+    source: "US-03"
+    scope: "BC-Escrow"
