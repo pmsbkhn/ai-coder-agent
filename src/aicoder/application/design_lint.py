@@ -57,6 +57,26 @@ multi-context requirement:
       value-object/record accessors (``copy.status()``) — while still keeping zero-arg
       repository finders (``repo.findAll()``).
 
+The T-family (Slice B) guards REQUIREMENTS TRACEABILITY against the structured intake
+(`RequirementSpec`), and only fires when one was supplied:
+
+  T1  an acceptance criterion (``AC-*``) is not covered by any locked oracle test — no
+      runnable test's ``traces_to`` references it, so the requirement is unenforced.
+  T3  a locked test traces to NO known requirement id (orphan) — it pins behavior that no
+      ``AC-*``/``NFR-*`` asked for, breaking the requirement↔test thread.
+  T2  an NFR (``NFR-*``) is addressed by neither a test ``traces_to`` nor a design note —
+      ADVISORY only (lives in ``lint_nfr_coverage``, never blocks/heals), since an NFR like
+      "p95 < 300ms" usually cannot be pinned by a unit test.
+  T4  event-flow consistency + traceability (``lint_event_flow``) — a Policy reacting to an
+      undeclared event / triggering an undeclared command, or a CMD/EVT/POL with no
+      ``traces_to``. ADVISORY only (Slice C), surfaced to the architect.
+  T5  integration back-tracking signal (``lint_integration``, Slice D) — a saga too long or
+      too many synchronous cross-context relationships, i.e. the Bước-3 boundaries are
+      probably wrong. ADVISORY only.
+
+T1/T3 are HARD: they join the L-family in ``lint_design``'s return value, so they block
+under ``design.review_strict`` and drive design-heal. T2/T4/T5 are returned separately.
+
 Pure function over the domain models — no infra, no I/O, fully deterministic. Findings
 are advisory by default (surfaced to the architect gate); under ``design.review_strict``
 a non-empty result blocks the run before the human gate, just like a failed review.
@@ -66,7 +86,7 @@ from __future__ import annotations
 
 import re
 
-from aicoder.domain.models import DesignSpec, TechSpec
+from aicoder.domain.models import DesignSpec, RequirementSpec, TechSpec
 
 # A method call / declaration: `name(args)`. Greedy-free param capture (no nested parens).
 _METHOD = re.compile(r"\b([A-Za-z_]\w*)\s*\(([^()]*)\)")
@@ -225,9 +245,21 @@ def _ref_dependencies(spec: DesignSpec, owners: dict[str, set[str]]) -> set[tupl
     return deps
 
 
-def lint_design(spec: DesignSpec) -> list[str]:
+def _locked_tests(spec: DesignSpec) -> list:
+    """The executable, locked-oracle cases (path + content) — the only ones that
+    actually pin behavior, so the only ones AC traceability (T1/T3) counts."""
+    return [t for ts in spec.tech_specs for t in ts.test_plan if t.path and t.content]
+
+
+def lint_design(spec: DesignSpec, req_spec: RequirementSpec | None = None) -> list[str]:
     """Return an ordered, de-duplicated list of cross-document consistency findings.
-    Empty list == the design is internally consistent on these checks."""
+    Empty list == the design is internally consistent on these checks.
+
+    When `req_spec` (the structured requirements intake, Slice B) is supplied, the
+    traceability rules T1/T3 are ALSO enforced (HARD — they block under review_strict
+    and drive the design-heal loop, exactly like L1-L9). NFR coverage (T2) is advisory
+    and lives in `lint_nfr_coverage`, not here, so it never blocks. With no req_spec
+    (the prose path) T1/T3 are skipped and behavior is unchanged."""
     issues: list[str] = []
     declared_names = _declared_method_names(spec)
     iface_arities = _interface_arities(spec)
@@ -409,14 +441,166 @@ def lint_design(spec: DesignSpec) -> list[str]:
                 f"others reference (map arrows point TO it)."
             )
 
+    # --- Traceability (Slice B) — only when a structured requirements intake exists.
+    if req_spec is not None:
+        known = set(req_spec.acceptance_ids) | set(req_spec.nfr_ids)
+        locked = _locked_tests(spec)
+
+        # T1 — every acceptance criterion must be pinned by a locked oracle test.
+        covered: set[str] = set()
+        for t in locked:
+            covered |= set(t.traces_to)
+        for ac in req_spec.acceptance_ids:
+            if ac not in covered:
+                issues.append(
+                    f"T1 acceptance criterion `{ac}` is not covered by any locked test — "
+                    f"every AC must be pinned by a runnable oracle. Add a test whose "
+                    f"`traces_to` includes `{ac}` (or lock an existing spec-only case)."
+                )
+
+        # T3 — every locked test must trace to at least one known requirement id.
+        for ts in spec.tech_specs:
+            for t in ts.test_plan:
+                if t.kind == "fitness" or not (t.path and t.content):
+                    continue  # fitness rules / spec-only cases need not map to an AC
+                if not (set(t.traces_to) & known):
+                    issues.append(
+                        f"T3 locked test `{t.id or t.path}` [{ts.bounded_context}] traces to "
+                        f"no known requirement (traces_to={t.traces_to or '[]'}) — every "
+                        f"locked test must reference at least one AC-/NFR- id from the "
+                        f"requirements; set `traces_to` or drop the test."
+                    )
+
     return issues
 
 
+def lint_nfr_coverage(spec: DesignSpec, req_spec: RequirementSpec | None = None) -> list[str]:
+    """T2 (ADVISORY) — each NFR should be addressed: referenced by a test's `traces_to`
+    OR mentioned in the design text (system nfr / per-context NFR / decisions / invariants
+    / ADRs). Advisory by design — it NEVER blocks and NEVER drives design-heal (an NFR like
+    'p95 < 300ms' usually cannot be pinned by a unit test); it is surfaced to the architect.
+    Returns [] when no req_spec was supplied."""
+    if req_spec is None:
+        return []
+    referenced: set[str] = set()
+    for ts in spec.tech_specs:
+        for t in ts.test_plan:
+            referenced |= set(t.traces_to)
+    haystack = "\n".join([
+        spec.summary, *spec.nfr, *spec.decisions, *spec.principles,
+        *(x for ts in spec.tech_specs
+          for x in (*ts.requirements_nonfunctional, *ts.invariants, *ts.adrs, ts.summary)),
+    ])
+    out: list[str] = []
+    for nfr in req_spec.nfrs:
+        if nfr.id in referenced or nfr.id in haystack:
+            continue
+        out.append(
+            f"T2 NFR `{nfr.id}` [{nfr.category.value}] '{nfr.metric}' is not addressed by any "
+            f"test (`traces_to`) or design note — add a decision/invariant/test that handles "
+            f"it, or record it as out of scope."
+        )
+    return out
+
+
+def lint_event_flow(spec: DesignSpec, req_spec: RequirementSpec | None = None) -> list[str]:
+    """T4 (ADVISORY) — event-flow consistency + traceability (Slice C). Never blocks /
+    heals; surfaced to the architect. Empty when no context models an event flow.
+
+      T4a  a Policy reacts to an event id (`when_event`) that no DomainEvent declares.
+      T4b  a Policy triggers a command id (`then_command`) that no Command declares.
+      T4c  (only with a req_spec) a Command / Event / Policy carries no `traces_to` — the
+           flow element does not derive from any stated requirement.
+    """
+    evt_ids = {e.id for ts in spec.tech_specs for e in ts.events if e.id}
+    cmd_ids = {c.id for ts in spec.tech_specs for c in ts.commands if c.id}
+    out: list[str] = []
+    for ts in spec.tech_specs:
+        for p in ts.policies:
+            if p.when_event and p.when_event not in evt_ids:
+                out.append(
+                    f"T4 policy `{p.id}` [{ts.bounded_context}] reacts to `{p.when_event}` "
+                    f"but no DomainEvent declares that id — declare the event or fix the ref."
+                )
+            if p.then_command and p.then_command not in cmd_ids:
+                out.append(
+                    f"T4 policy `{p.id}` [{ts.bounded_context}] triggers `{p.then_command}` "
+                    f"but no Command declares that id — declare the command or fix the ref."
+                )
+        if req_spec is not None:
+            for el in (*ts.commands, *ts.events, *ts.policies):
+                if not el.traces_to:
+                    out.append(
+                        f"T4 event-flow element `{el.id}` [{ts.bounded_context}] has no "
+                        f"`traces_to` — link it to the US/AC it derives from (or drop it)."
+                    )
+    return out
+
+
+# A saga longer than this, or this many synchronous cross-context relationships, is the
+# design-flow "Bước 5 → quay lui Bước 3" smell: the context boundaries are probably wrong.
+_MAX_SAGA_STEPS = 5
+_MAX_SYNC_RELATIONSHIPS = 3
+
+
+def lint_integration(spec: DesignSpec, req_spec: RequirementSpec | None = None) -> list[str]:
+    """T5 (ADVISORY) — the integration back-tracking signal (design-flow Bước 5). A saga
+    that is too long, or too many synchronous cross-context calls, usually means the Bước-3
+    boundaries are wrong (contexts too finely split). Never blocks/heals — it tells the
+    architect to reconsider the Context Map. Empty when no integration is modeled."""
+    out: list[str] = []
+    for s in spec.sagas:
+        if len(s.steps) > _MAX_SAGA_STEPS:
+            out.append(
+                f"T5 saga `{s.id}` has {len(s.steps)} steps (> {_MAX_SAGA_STEPS}) — a long "
+                f"saga is a boundary smell; consider whether two contexts it spans should "
+                f"merge (design-flow Bước 5 → quay lại Bước 3)."
+            )
+    sync = [r for r in spec.relationships if "sync" in (r.mechanism or "").lower()]
+    if len(sync) > _MAX_SYNC_RELATIONSHIPS:
+        ids = ", ".join(r.id for r in sync)
+        out.append(
+            f"T5 the design has {len(sync)} synchronous cross-context relationships "
+            f"({ids}) — high sync coupling suggests the Bước-3 boundaries may be wrong; "
+            f"consider merging the tightly-coupled contexts."
+        )
+    return out
+
+
+def _traces(items) -> str:
+    """`→ AC-01, AC-02` for an element carrying `traces_to` (empty string when none)."""
+    ids = ", ".join(getattr(items, "traces_to", []) or [])
+    return f" → {ids}" if ids else ""
+
+
 def render_contracts(spec: DesignSpec) -> str:
-    """A compact, per-context digest of the binding contracts (interfaces, invariants,
-    domain model, key flows) — fed to the adversarial Reviewer so it can judge the
-    tests AGAINST the contracts, not in a vacuum."""
+    """A compact, per-context digest of the binding contracts — fed to (a) the adversarial
+    Reviewer so it judges the tests AGAINST the contracts, and (b) the Designer on a
+    design-heal REVISE (designer_llm.revise_design), which otherwise sees only this digest,
+    not the full previous DesignSpec. So the digest MUST name every droppable element —
+    event flow, integration contracts, the test→requirement traces, and the system-level
+    relationships/sagas — or a revise pass silently forgets them. Compact (ids + labels,
+    no test bodies) to stay token-cheap."""
     blocks: list[str] = []
+
+    # System-level structure (droppable on a revise that only sees the per-context digest).
+    sys_lines: list[str] = []
+    if spec.relationships:
+        sys_lines.append("Context relationships:")
+        sys_lines += [f"  - {r.id} {r.upstream}→{r.downstream} [{r.kind.value}; "
+                      f"{r.mechanism}]" for r in spec.relationships]
+    if spec.sagas:
+        sys_lines.append("Sagas:")
+        sys_lines += [f"  - {s.id} {s.name} ({s.kind}, {len(s.steps)} steps)" for s in spec.sagas]
+    if spec.use_cases:
+        sys_lines.append("Use cases: "
+                         + "; ".join(f"{u.id} {u.name}{_traces(u)}" for u in spec.use_cases))
+    if spec.glossary:
+        sys_lines.append("Glossary: "
+                         + "; ".join(f"{g.id} {g.term}@{g.bounded_context}" for g in spec.glossary))
+    if sys_lines:
+        blocks.append("## System\n" + "\n".join(sys_lines))
+
     for ts in spec.tech_specs:
         lines = [f"## {ts.bounded_context}"]
         if ts.interface_changes:
@@ -429,5 +613,26 @@ def render_contracts(spec: DesignSpec) -> str:
             lines += ["Domain model:", ts.domain_model.strip()]
         if ts.key_flows.strip():
             lines += ["Key flows:", ts.key_flows.strip()]
+        # Event flow (template A5) — name each element so a revise keeps them.
+        if ts.commands or ts.events or ts.policies or ts.read_models:
+            lines.append("Event flow:")
+            lines += [f"  - {c.id} {c.name} (cmd){_traces(c)}" for c in ts.commands]
+            lines += [f"  - {e.id} {e.name} (evt){_traces(e)}" for e in ts.events]
+            lines += [f"  - {p.id} ({p.when_event}→{p.then_command}) (policy){_traces(p)}"
+                      for p in ts.policies]
+            lines += [f"  - {r.id} {r.name} (read-model){_traces(r)}" for r in ts.read_models]
+        # Integration contracts (template A8).
+        if ts.apis or ts.event_schemas:
+            lines.append("Integration:")
+            lines += [f"  - {a.id} {a.method} {a.path}{_traces(a)}" for a in ts.apis]
+            lines += [f"  - {e.id} {e.event_name} → {', '.join(e.consumers)}{_traces(e)}"
+                      for e in ts.event_schemas]
+        # Tests + their requirement traces (NOT the bodies) — so a revise does not drop
+        # coverage or re-derive traces_to from scratch.
+        if ts.test_plan:
+            lines.append("Tests (id [title] → traces):")
+            lines += [f"  - {t.id} [{t.title}]{_traces(t)}"
+                      + ("" if (t.path and t.content) else " (spec-only)")
+                      for t in ts.test_plan]
         blocks.append("\n".join(lines))
     return "\n\n".join(blocks)

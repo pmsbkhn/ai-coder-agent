@@ -50,6 +50,7 @@ config), and **measurability** (objective eval).
 | 06 | [Status & roadmap](06-status-and-roadmap.md) | — | what exists, what's weak, what's next |
 | 07 | [Proposal: design-first phase](07-design-first-proposal.md) | Decision (Implemented) | making design + test cases explicit, human-gated outputs |
 | 08 | [Proposal: analysis phase](08-analysis-phase-proposal.md) | Decision (Implemented) | making requirement analysis + a clarification gate explicit, fed forward to design, tiered by complexity |
+| 09 | [Proposal: structured requirements & traceability](09-structured-requirements.md) | Decision (Implemented) | User Stories + NFRs in; derived B1–B5 artifacts out; AC→test traceability enforced by the linter |
 
 ## Correspondences & consistency rules (42010 §5.7)
 

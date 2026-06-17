@@ -60,14 +60,16 @@ class FakeDesigner:
         self._revised = revised  # design returned by revise_design; None = unchanged
         self.seen_analysis = None  # the AnalysisSpec handed in (ADR-08 Slice 3), if any
 
-    def propose_design(self, requirement: str, repo_map: str, analysis=None) -> DesignSpec:
+    def propose_design(self, requirement: str, repo_map: str, analysis=None, spec=None) -> DesignSpec:
         self.calls += 1
         self.seen_analysis = analysis
+        self.seen_spec = spec
         return DesignSpec.model_validate(self._design)
 
-    def revise_design(self, requirement, repo_map, previous, issues, analysis=None) -> DesignSpec:
+    def revise_design(self, requirement, repo_map, previous, issues, analysis=None, spec=None) -> DesignSpec:
         self.revise_calls += 1
         self.seen_analysis = analysis
+        self.seen_spec = spec
         return DesignSpec.model_validate(self._revised if self._revised is not None else self._design)
 
 

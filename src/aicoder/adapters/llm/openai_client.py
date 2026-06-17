@@ -34,6 +34,10 @@ class OpenAICompatibleClient:
         # it via env; passed through Ollama's OpenAI-compat layer as an option.
         ctx = os.environ.get("AICODER_LLM_NUM_CTX")
         self._extra_body = {"options": {"num_ctx": int(ctx)}} if ctx else None
+        # The model's usable context window for the prompt-budget guard (structured.py).
+        # When unset, Ollama defaults num_ctx to 4096 — so that IS the real window, and
+        # the guard should warn against it (the classic silent-truncation footgun).
+        self.context_tokens = int(ctx) if ctx else 4096
 
     def complete_json(
         self, *, system: str, user: str, json_schema: dict, tool_name: str = "emit"

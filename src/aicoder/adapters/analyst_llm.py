@@ -14,7 +14,8 @@ from __future__ import annotations
 from aicoder.adapters.llm.base import LLMClient
 from aicoder.adapters.llm.structured import generate_structured
 from aicoder.application.profile import ProjectProfile
-from aicoder.domain.models import AnalysisSpec
+from aicoder.application.requirement_spec import render_requirement_section as _format_spec
+from aicoder.domain.models import AnalysisSpec, RequirementSpec
 
 _SYSTEM = """You are the Analyst of an autonomous coding agent on an MSFW project
 (Java 21 / Spring Boot 4, strict Hexagonal / Ports & Adapters, DDD).
@@ -47,6 +48,27 @@ Be decisive about ASSUMPTIONS — state them rather than asking — but be hones
 the VERDICT itself.
 """
 
+# When a structured RequirementSpec is supplied (Slice A), the human already authored
+# the User Stories, acceptance criteria, and NFRs — so the Analyst's job INVERTS: it no
+# longer invents "done", it CHECKS the given contract for the gaps a designer would trip
+# on. This addendum replaces the prose-mode verdict rule above.
+_STRUCTURED = """
+## Structured input mode (a RequirementSpec was provided)
+The User Stories, acceptance criteria (AC-*), and NFRs (NFR-*) below are HUMAN-AUTHORED
+and BINDING — do not rewrite, widen, or drop them. Your job is a completeness & conflict
+check, not invention:
+- restatement: the scope as the stories define it, in 1-3 sentences.
+- assumptions: only the gaps the stories leave open that you can responsibly fill.
+- open_questions: GENUINE problems that block safe design — two acceptance criteria that
+  contradict each other, an NFR that cannot hold together with another, a story whose AC
+  omit an obviously-required error/edge branch, or a term used inconsistently.
+- acceptance_criteria: echo the given AC ids + their intent (do not invent new ones; you
+  may note an implied missing branch as an open_question instead).
+- ambiguous: TRUE only when there is a real CONFLICT or a GAP that makes safe design
+  impossible — NOT merely because refinements remain. Clear, non-contradictory stories
+  with measurable NFRs are NOT ambiguous, even if more detail could be added.
+"""
+
 
 def _conventions_section(profile: ProjectProfile) -> str:
     """Stack/framework primitives from the profile — so the Analyst frames its
@@ -71,13 +93,20 @@ class LLMAnalyst:
         self._profile = profile
         self._cap = max_repo_map_chars
 
-    def analyze(self, requirement: str, repo_map: str) -> AnalysisSpec:
+    def analyze(
+        self, requirement: str, repo_map: str, spec: RequirementSpec | None = None
+    ) -> AnalysisSpec:
+        system = _SYSTEM + _conventions_section(self._profile)
+        if spec is not None:
+            system += _STRUCTURED
+            req_section = _format_spec(spec)
+        else:
+            req_section = f"# Requirement (prose)\n{requirement}"
         user = (
-            f"# Requirement (prose)\n{requirement}\n\n"
+            f"{req_section}\n\n"
             f"# Repo Map (skeleton — request full symbols later via zoom-in)\n"
             f"{repo_map[: self._cap]}"
         )
         return generate_structured(
-            self._client, system=_SYSTEM + _conventions_section(self._profile),
-            user=user, model_cls=AnalysisSpec, retries=1,
+            self._client, system=system, user=user, model_cls=AnalysisSpec, retries=1,
         )

@@ -55,8 +55,9 @@ class FakeAnalyst:
         self.calls = 0
         self._spec = spec
 
-    def analyze(self, requirement: str, repo_map: str) -> AnalysisSpec:
+    def analyze(self, requirement: str, repo_map: str, spec=None) -> AnalysisSpec:
         self.calls += 1
+        self.req_spec = spec
         return AnalysisSpec.model_validate(self._spec)
 
 

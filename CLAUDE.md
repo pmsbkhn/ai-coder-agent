@@ -126,6 +126,36 @@ Run: `uv run python eval/run_eval.py [--suite lite|msfw] [--repeat N] [--timeout
   compile (missing `tech.vsf.ptnt.msfw.domain.eventsourcing`), which the agent cannot fix by editing sample-service.
 
 ## Recently completed (this cycle)
+- **Structured requirements intake + traceability DONE (AD-16; see `docs/architecture/09`)** — the input contract moved
+  from a vague prose blob to a `RequirementSpec` (YAML via `--requirements <file>`: User Stories + Gherkin AC + measurable
+  ISO-25010 NFRs). The human authors *what to build* (the only thing the agent does not invent); the agent derives B1–B5
+  and traces every artifact to an `AC-/NFR-` id. Four slices, all opt-in (no `--requirements` ⇒ prose path unchanged, all
+  T-rules off):
+  - **A** `RequirementSpec` model (`domain/models.py`) + loader (`application/requirement_spec.py`) + `--requirements`
+    CLI; `to_prose()` keeps every str-typed consumer unchanged; Analyst/Designer get the structured contract; the Analyst
+    REFRAMES (with AC given, `ambiguous`/clarification gate fires on conflict/gap, not prose vagueness).
+  - **B** `ProposedTest.traces_to`; linter **T1** (every AC → a locked test) + **T3** (every locked test → a known
+    requirement) HARD (block under `review_strict`, drive design-heal) + **T2** NFR coverage advisory
+    (`lint_nfr_coverage`); writes `docs/design/requirements.md` (US/NFR tables + **AC→test matrix**), AD links it.
+  - **C** Event Flow per context — `Command/DomainEvent/Policy/ReadModel` (template A5) + derived `GlossaryTerm` (A4) /
+    `UseCase` (A2) at AD level; linter **T4** (event-flow consistency + traces) advisory (`lint_event_flow`); Tech Spec §5.1.
+  - **D** typed Context Map (`ContextRelationship`, fixed DDD kinds) + `ApiSpec`/`EventSchema`/`SagaSpec` (template A8);
+    linter **T5** (over-long saga / too many sync cross-context calls ⇒ Bước-3 boundary smell) advisory
+    (`lint_integration`); AD renders Context-Map + Sagas, Tech Spec §5.2 renders APIs/events.
+  - Graceful degradation: a single-context CRUD change models no event-flow/relationships/sagas (fields empty, doc
+    sections omitted). Example intake: `examples/requirements/order-note.yaml`. Tests: `tests/test_requirement_spec.py`,
+    `test_design_traceability.py`, `test_event_flow.py`, `test_integration_design.py`. **NOTE: not yet run on a dev box
+    with the toolchain — `py_compile` clean only; run `uv run pytest` + `uv run lint-imports` to confirm green.**
+  - **Design-loop memory hardening** (same cycle): the analysis/design flow is STATELESS + forward-passing (each phase
+    rebuilds its prompt from validated objects — no growing conversation to forget), with the deterministic linter as the
+    real anti-forgetting backstop (it CHECKS, never relies on recall). Two concrete gaps closed: (1) `render_contracts`
+    (the digest the design-heal `revise_design` sees INSTEAD of the full prior DesignSpec) now names every droppable
+    element — event flow, integration contracts, test→requirement traces (ids only, no bodies), and a system block for
+    relationships/sagas/use-cases/glossary — so a revise can't silently drop them; (2) a prompt-budget guard
+    (`adapters/llm/budget.py`) logs a loud WARNING when `system+schema+user` likely exceeds the model's window instead of
+    letting the provider truncate silently (the model would "forget" the contract with no error). Clients expose
+    `context_tokens` (Ollama 4096 default — the footgun; Anthropic 200k; unknown ⇒ no guard). Tests: `test_render_contracts`,
+    `test_llm_budget`. Still open (long-term): wire RAG into the loop (AD-12) to recall past designs/decisions.
 - **Eval suites + leaderboard DONE** (see the Eval harness section): lite 3/3, msfw 1/2, per-model leaderboard +
   `--repeat` reliability. More golden tasks (event-sourcing, bugfix, budget-stressing) remain a nice-to-have.
 - **M5**: **PR/delivery flow DONE** — git server `push` + `open_pr` (via `gh`); orchestrator runs a
