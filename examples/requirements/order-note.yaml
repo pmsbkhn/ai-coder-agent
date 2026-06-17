@@ -1,0 +1,46 @@
+# Example structured requirements intake (Slice A).
+#   uv run python -m aicoder --requirements examples/requirements/order-note.yaml \
+#       --profile profiles/msfw.yaml
+#
+# This file IS the binding contract: the agent does not invent "done" — it designs and
+# tests to satisfy every AC-* and NFR-*. Categories use the ISO 25010 vocabulary
+# (Performance, Reliability, Security, Scalability, Maintainability, Compatibility,
+# Usability, Portability).
+
+meta:
+  title: "Order note"
+
+stories:
+  - id: US-01
+    title: "Customer notes an order"
+    as_a: "customer"
+    i_want: "attach a short note to my order"
+    so_that: "the courier sees special delivery instructions"
+    priority: High
+    acceptance:
+      - id: AC-01
+        given: "an order in PLACED state"
+        when: "the customer sets a note of at most 280 characters"
+        then: "the note is stored and appears on the OrderPlaced event"
+      - id: AC-02
+        given: "a note longer than 280 characters"
+        when: "the customer submits it"
+        then: "it is rejected with DomainException(NOTE_TOO_LONG) and the order is unchanged"
+      - id: AC-03
+        given: "an order with no note"
+        when: "the order is placed"
+        then: "OrderPlaced carries a null note (the field is optional)"
+
+nfrs:
+  - id: NFR-01
+    category: Performance
+    metric: "p95 < 300ms for POST /orders"
+    measurement: "measured at the API gateway"
+    source: "US-01"
+    scope: "BC-Order"
+  - id: NFR-02
+    category: Security
+    metric: "the note is never written to logs in clear text"
+    measurement: "review of the logging appender configuration"
+    source: "Compliance"
+    scope: "BC-Order"

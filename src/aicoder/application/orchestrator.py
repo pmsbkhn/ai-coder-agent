@@ -34,16 +34,31 @@ from aicoder.application.ports.outbound import (
 from aicoder.application.design_docs import (
     ad_path,
     render_ad,
+    render_requirements,
     render_tech_spec,
     render_test_cases,
+    requirements_path,
     tech_spec_path,
     test_cases_path,
 )
-from aicoder.application.design_lint import lint_design, render_contracts
+from aicoder.application.design_lint import (
+    lint_design,
+    lint_event_flow,
+    lint_integration,
+    lint_nfr_coverage,
+    render_contracts,
+)
 from aicoder.application.profile import ProjectProfile
 from aicoder.application.tiering import estimate_complexity
 from aicoder.domain.errors import ToolInvocationError
-from aicoder.domain.models import AnalysisSpec, ExecutionTrace, SessionState, Task, ToolRequest
+from aicoder.domain.models import (
+    AnalysisSpec,
+    ExecutionTrace,
+    RequirementSpec,
+    SessionState,
+    Task,
+    ToolRequest,
+)
 from aicoder.domain.session import AgentSession
 
 
@@ -99,7 +114,15 @@ class Orchestrator:
     # ------------------------------------------------------------------ #
     # Public entry point (RequirementPort)
     # ------------------------------------------------------------------ #
-    def run_requirement(self, prompt: str, idempotency_key: str | None = None) -> AgentSession:
+    def run_requirement(
+        self, prompt: str, idempotency_key: str | None = None, *,
+        spec: RequirementSpec | None = None,
+    ) -> AgentSession:
+        # Structured intake (Slice A): when a RequirementSpec is supplied, its canonical
+        # prose drives every str-typed downstream consumer (Planner/Coder/logs/session id)
+        # unchanged, while the structured US/AC/NFR is handed to the Analyst + Designer.
+        if spec is not None:
+            prompt = spec.to_prose()
         session_id = idempotency_key or _new_session_id(prompt)
 
         # TC-CORE-02: a live session for the same key short-circuits (no re-plan).
@@ -114,6 +137,13 @@ class Orchestrator:
             no_progress_breaker=self._profile.healing.no_progress_breaker,
         )
         self._log(session, "SESSION_CREATED", {"prompt": prompt})
+        if spec is not None:
+            self._log(session, "REQUIREMENTS_LOADED", {
+                "title": spec.title,
+                "stories": [us.id for us in spec.stories],
+                "acceptance_criteria": spec.acceptance_ids,
+                "nfrs": spec.nfr_ids,
+            })
 
         # Pre-implementation ordering (ADR-08 + M07): the pipeline is
         #   ANALYZE -> [clarification gate] -> DESIGN(AD+TechSpecs) -> [architect gate]
@@ -142,7 +172,9 @@ class Orchestrator:
 
         # ---- ANALYZE: restate a prose requirement + surface ambiguity. A genuinely
         # ambiguous requirement blocks on the human clarification gate (ADR-08). ----
-        analysis, proceed = self._run_analysis(session, prompt, repo_map, tiering.is_complex)
+        analysis, proceed = self._run_analysis(
+            session, prompt, repo_map, tiering.is_complex, spec
+        )
         if not proceed:
             self._memory.save_session(session)
             return session
@@ -152,7 +184,7 @@ class Orchestrator:
         # approved analysis (if any) is handed to the Designer so the proposed tests
         # trace to its explicit acceptance criteria (ADR-08 Slice 3). ----
         locked, proceed = self._run_design(
-            session, prompt, repo_map, workdir, applied, analysis, tiering.is_complex
+            session, prompt, repo_map, workdir, applied, analysis, tiering.is_complex, spec
         )
         if not proceed:
             self._memory.save_session(session)
@@ -206,7 +238,8 @@ class Orchestrator:
         return session
 
     def _run_analysis(
-        self, session: AgentSession, prompt: str, repo_map: str, is_complex: bool
+        self, session: AgentSession, prompt: str, repo_map: str, is_complex: bool,
+        spec: RequirementSpec | None = None,
     ) -> tuple[AnalysisSpec | None, bool]:
         """ADR-08 analysis phase — runs BEFORE design. Returns (analysis, proceed);
         `analysis` is handed to the Designer (Slice 3) so its tests trace to the
@@ -229,36 +262,36 @@ class Orchestrator:
             return None, True
 
         session.start_analyzing()  # PLANNING -> ANALYZING
-        spec = self._analyst.analyze(prompt, repo_map)
+        analysis = self._analyst.analyze(prompt, repo_map, spec)
         self._log(session, "ANALYSIS_DONE", {
-            "restatement": spec.restatement[:500],
-            "assumptions": spec.assumptions[:10],
-            "open_questions": spec.open_questions[:10],
-            "acceptance_criteria": spec.acceptance_criteria[:10],
-            "ambiguous": spec.ambiguous,
+            "restatement": analysis.restatement[:500],
+            "assumptions": analysis.assumptions[:10],
+            "open_questions": analysis.open_questions[:10],
+            "acceptance_criteria": analysis.acceptance_criteria[:10],
+            "ambiguous": analysis.ambiguous,
         })
-        if not spec.ambiguous:
+        if not analysis.ambiguous:
             session.resume_planning()  # ANALYZING -> PLANNING
-            return spec, True
+            return analysis, True
 
         session.await_clarification()  # ANALYZING -> AWAITING_CLARIFICATION
-        self._log(session, "NEEDS_CLARIFICATION", {"open_questions": spec.open_questions[:10]})
+        self._log(session, "NEEDS_CLARIFICATION", {"open_questions": analysis.open_questions[:10]})
         if self._approval is None:
             session.resume_planning()  # no gate wired → audit-only, proceed on assumptions
-            return spec, True
-        summary = (f"clarify {len(spec.open_questions)} open question(s) before building — "
+            return analysis, True
+        summary = (f"clarify {len(analysis.open_questions)} open question(s) before building — "
                    f"proceed on the analyst's assumptions?")
         if self._approval.request_approval("clarification", summary):
-            self._log(session, "CLARIFICATION_PROCEED", {"assumptions": spec.assumptions[:10]})
+            self._log(session, "CLARIFICATION_PROCEED", {"assumptions": analysis.assumptions[:10]})
             session.resume_planning()  # AWAITING_CLARIFICATION -> PLANNING
-            return spec, True
+            return analysis, True
         session.transition_to(SessionState.BLOCKED)  # AWAITING_CLARIFICATION -> BLOCKED
-        self._log(session, "CLARIFICATION_REQUIRED", {"open_questions": spec.open_questions[:10]})
-        return spec, False
+        self._log(session, "CLARIFICATION_REQUIRED", {"open_questions": analysis.open_questions[:10]})
+        return analysis, False
 
     def _repair_design(
         self, session: AgentSession, spec, prompt: str, repo_map: str,
-        analysis: AnalysisSpec | None,
+        analysis: AnalysisSpec | None, requirement_spec: RequirementSpec | None = None,
     ):
         """Bounded design-heal: while the deterministic linter finds cross-document
         inconsistencies, hand them back to the Designer to revise — capped by
@@ -266,23 +299,24 @@ class Orchestrator:
         Keyed on the linter (objective + machine-checkable), NOT the advisory LLM review.
         A Designer adapter without revise support (or a transient failure) ends the loop
         gracefully with whatever it has."""
-        issues = lint_design(spec)
+        issues = lint_design(spec, requirement_spec)
         budget = max(0, self._profile.design.max_design_repairs)
         repairs = 0
         while issues and repairs < budget:
             self._log(session, "DESIGN_REVISED", {"attempt": repairs + 1, "fixing": issues[:10]})
             try:
-                spec = self._designer.revise_design(prompt, repo_map, spec, issues, analysis)
+                spec = self._designer.revise_design(
+                    prompt, repo_map, spec, issues, analysis, requirement_spec)
             except (AttributeError, NotImplementedError):
                 break  # Designer adapter does not support revision
             repairs += 1
-            issues = lint_design(spec)
+            issues = lint_design(spec, requirement_spec)
         return spec, issues, repairs
 
     def _run_design(
         self, session: AgentSession, prompt: str, repo_map: str, workdir: str,
         applied: dict[str, str], analysis: AnalysisSpec | None = None,
-        is_complex: bool = True,
+        is_complex: bool = True, spec: RequirementSpec | None = None,
     ) -> tuple[set[str], bool]:
         """M07 design-first — runs BEFORE planning. Returns (locked_test_paths, proceed).
 
@@ -305,33 +339,39 @@ class Orchestrator:
             self._log(session, "DESIGN_SKIPPED", {"reason": "trivial change (auto tier)"})
             return set(), True
 
-        spec = self._designer.propose_design(prompt, repo_map, analysis)
+        design = self._designer.propose_design(prompt, repo_map, analysis, spec)
         # Deterministic design-heal (no LLM verdict): the linter checks cross-document
         # contract consistency — an undeclared method called in a flow, a method with
         # two signatures, a type with no single owner, naming drift — and hands any
         # findings back to the Designer to auto-revise (bounded), so the architect gates
         # a consistent design rather than the build failing later. Runs in all paths.
-        spec, lint_issues, repairs = self._repair_design(
-            session, spec, prompt, repo_map, analysis)
+        design, lint_issues, repairs = self._repair_design(
+            session, design, prompt, repo_map, analysis, spec)
         if analysis is not None:
             self._log(session, "DESIGN_TRACE", {
                 "from": "analysis",
                 "acceptance_criteria": analysis.acceptance_criteria[:10],
-                "proposed_tests": [t.path for t in spec.executable_tests()],
+                "proposed_tests": [t.path for t in design.executable_tests()],
             })
         # Materialize the explicit design artifacts: one umbrella AD + one Tech Spec
         # per bounded context (1 BC = 1 Tech Spec), written into the worktree so they
         # are reviewable and commit alongside the change.
-        docs = self._write_design_docs(workdir, spec, prompt, applied)
+        docs = self._write_design_docs(workdir, design, prompt, applied, spec)
         self._log(session, "DESIGN_PROPOSED", {
-            "summary": spec.summary[:500],
-            "bounded_contexts": spec.bounded_contexts,
+            "summary": design.summary[:500],
+            "bounded_contexts": design.bounded_contexts,
             "docs": docs,
-            "proposed_tests": [t.path for t in spec.executable_tests()],
+            "proposed_tests": [t.path for t in design.executable_tests()],
             "repairs": repairs,
         })
+        # T2/T4/T5 are advisory: logged for the architect, never block / heal.
+        nfr_gaps = lint_nfr_coverage(design, spec)
+        flow_gaps = lint_event_flow(design, spec)
+        integ_gaps = lint_integration(design, spec)
         self._log(session, "DESIGN_LINT",
-                  {"ok": not lint_issues, "issues": lint_issues[:10], "repairs": repairs})
+                  {"ok": not lint_issues, "issues": lint_issues[:10], "repairs": repairs,
+                   "nfr_advisory": nfr_gaps[:10], "event_flow_advisory": flow_gaps[:10],
+                   "integration_advisory": integ_gaps[:10]})
 
         if self._approval is None:
             return set(), True  # Slice-1 behavior: AD + Tech Specs written + logged, not gated
@@ -343,9 +383,9 @@ class Orchestrator:
         review = None
         if self._reviewer is not None:
             review = self._reviewer.review_tests(
-                prompt, spec.summary,
-                [f"{t.id} [{t.title}] {t.spec}\n{t.content}".strip() for t in spec.all_tests()],
-                contracts=render_contracts(spec),
+                prompt, design.summary,
+                [f"{t.id} [{t.title}] {t.spec}\n{t.content}".strip() for t in design.all_tests()],
+                contracts=render_contracts(design),
             )
             self._log(session, "TEST_REVIEW", {"ok": review.ok, "concerns": review.concerns[:10]})
 
@@ -364,7 +404,7 @@ class Orchestrator:
         # then gate on the ARCHITECT before locking them.
         session.start_designing()  # PLANNING -> DESIGNING
         locked: set[str] = set()
-        for t in spec.executable_tests():
+        for t in design.executable_tests():
             self._tool("git", "write_file", workdir=workdir, path=t.path, content=t.content)
             locked.add(t.path.replace("\\", "/"))
             applied[t.path.replace("\\", "/")] = t.content  # survive reset-to-clean
@@ -374,8 +414,8 @@ class Orchestrator:
                   {"action": "architect_review", "docs": docs,
                    "tests": sorted(locked), "review_concerns": concerns,
                    "lint_issues": lint_issues[:10]})
-        summary = (f"architect review — {len(spec.tech_specs)} tech spec(s) across "
-                   f"{spec.bounded_contexts}; {len(locked)} test(s)"
+        summary = (f"architect review — {len(design.tech_specs)} tech spec(s) across "
+                   f"{design.bounded_contexts}; {len(locked)} test(s)"
                    + (f"; {len(concerns)} review concern(s)" if concerns else "")
                    + (f"; {len(lint_issues)} lint issue(s)" if lint_issues else ""))
         if self._approval.request_approval("design", summary):
@@ -387,10 +427,13 @@ class Orchestrator:
         return set(), False
 
     def _write_design_docs(
-        self, workdir: str, spec, requirement: str, applied: dict[str, str]
+        self, workdir: str, spec, requirement: str, applied: dict[str, str],
+        req_spec: RequirementSpec | None = None,
     ) -> list[str]:
         """Render + write the AD (umbrella, SAD-style) and, per bounded context, one
-        Tech Spec + one Test Cases doc (1 BC = 1 Tech Spec). Recorded in `applied` so a
+        Tech Spec + one Test Cases doc (1 BC = 1 Tech Spec). When a structured intake was
+        supplied (Slice B), ALSO write a requirements.md (US/NFR tables + the AC→test
+        traceability matrix) and link it from the AD. Recorded in `applied` so a
         reset-to-clean heal restores them and they commit with the change."""
         docs_dir = self._profile.design.docs_dir
         paths: list[str] = []
@@ -400,7 +443,11 @@ class Orchestrator:
             applied[path] = content
             paths.append(path)
 
-        _write(ad_path(docs_dir), render_ad(spec, requirement, docs_dir))
+        req_link = None
+        if req_spec is not None:
+            req_link = requirements_path(docs_dir).split("/")[-1]
+            _write(requirements_path(docs_dir), render_requirements(req_spec, spec, docs_dir))
+        _write(ad_path(docs_dir), render_ad(spec, requirement, docs_dir, requirements_link=req_link))
         for ts in spec.tech_specs:
             _write(tech_spec_path(ts, docs_dir), render_tech_spec(ts, docs_dir))
             _write(test_cases_path(ts, docs_dir), render_test_cases(ts, docs_dir))

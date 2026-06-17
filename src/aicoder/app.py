@@ -106,12 +106,28 @@ def _arch_pattern(profile) -> str | None:
 
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(prog="aicoder")
-    parser.add_argument("requirement", help="what the agent should implement")
+    parser.add_argument(
+        "requirement", nargs="?", default=None,
+        help="prose requirement (omit when --requirements is given)",
+    )
+    parser.add_argument(
+        "--requirements",
+        help="path to a structured requirements YAML (User Stories + NFRs); replaces "
+             "the prose arg and feeds the Analyst/Designer the binding US/AC/NFR contract",
+    )
     parser.add_argument("--profile", default="profiles/msfw.yaml")
     args = parser.parse_args(argv)
 
+    spec = None
+    if args.requirements:
+        from aicoder.application.requirement_spec import load_requirement_spec
+
+        spec = load_requirement_spec(args.requirements)
+    elif not args.requirement:
+        parser.error("provide a prose requirement or --requirements <file.yaml>")
+
     orch = build_orchestrator(args.profile)
-    session = orch.run_requirement(args.requirement)
+    session = orch.run_requirement(args.requirement or "", spec=spec)
 
     print(f"\n=== Session {session.session_id}: {session.state.value} ===")
     if session.plan:

@@ -15,6 +15,7 @@ from aicoder.domain.models import (
     DesignSpec,
     ExecutionTrace,
     Plan,
+    RequirementSpec,
     Task,
     TestReview,
     ToolRequest,
@@ -53,7 +54,13 @@ class AnalysisPort(Protocol):
     assumptions, open questions, acceptance criteria, and an ambiguity verdict —
     BEFORE design. Runs on the reasoner role (stateless reasoning)."""
 
-    def analyze(self, requirement: str, repo_map: str) -> AnalysisSpec:
+    def analyze(
+        self, requirement: str, repo_map: str, spec: RequirementSpec | None = None
+    ) -> AnalysisSpec:
+        """`spec` is the structured requirements contract (Slice A) when an intake file
+        was supplied: with human-authored acceptance criteria + NFRs in hand, the Analyst
+        shifts from inventing 'done' to CHECKING the stories for conflict / gaps. None
+        keeps the prose behavior (restate vague text, surface ambiguity)."""
         ...
 
 
@@ -64,17 +71,23 @@ class DesignPort(Protocol):
     tests — BEFORE coding. Runs on the reasoner role (stateless reasoning)."""
 
     def propose_design(
-        self, requirement: str, repo_map: str, analysis: AnalysisSpec | None = None
+        self, requirement: str, repo_map: str, analysis: AnalysisSpec | None = None,
+        spec: RequirementSpec | None = None,
     ) -> DesignSpec:
         """`analysis` is the upstream AnalysisSpec (ADR-08) when the analysis phase
         ran: its acceptance criteria + assumptions are handed to the Designer so the
         proposed tests trace to explicit, human-visible criteria instead of the
-        Designer re-deriving "done" from the raw prose. None when analysis is off."""
+        Designer re-deriving "done" from the raw prose. None when analysis is off.
+
+        `spec` is the structured requirements contract (Slice A) when an intake file was
+        supplied: its US/AC/NFR ids are the binding contract the design must satisfy and
+        the anchors the proposed tests trace back to. None keeps the prose behavior."""
         ...
 
     def revise_design(
         self, requirement: str, repo_map: str, previous: DesignSpec,
         issues: list[str], analysis: AnalysisSpec | None = None,
+        spec: RequirementSpec | None = None,
     ) -> DesignSpec:
         """Design-heal (M07): re-emit a corrected DesignSpec resolving the deterministic
         linter's cross-document consistency `issues`, keeping the same scope/contexts as

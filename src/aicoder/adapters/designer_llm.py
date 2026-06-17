@@ -14,7 +14,8 @@ from aicoder.adapters.llm.base import LLMClient
 from aicoder.adapters.llm.structured import generate_structured
 from aicoder.application.design_lint import render_contracts
 from aicoder.application.profile import ProjectProfile
-from aicoder.domain.models import AnalysisSpec, DesignSpec
+from aicoder.application.requirement_spec import render_requirement_section
+from aicoder.domain.models import AnalysisSpec, DesignSpec, RequirementSpec
 
 _SYSTEM = """You are the Designer of an autonomous coding agent on an MSFW project
 (Java 21 / Spring Boot 4, strict Hexagonal / Ports & Adapters, DDD, event-driven).
@@ -36,6 +37,21 @@ satisfies the requirement; do not over-engineer; do not split one cohesive conte
   solid arrow = synchronous orchestration call, dashed = domain event (choreography).
 - decisions: cross-cutting / integration decisions worth recording.
 - nfr: system-level non-functional requirements / constraints (SLO, compliance).
+- use_cases: (only when a Requirements section is given) the Use Cases you DERIVE by
+  grouping the User Stories — id "UC-NN", name (verb + object), primary_actor, main_flow,
+  and traces_to = the US ids it gathers. Keep it light; omit for a single trivial story.
+- glossary: (only when a Requirements section is given) the Ubiquitous-Language terms this
+  change introduces or touches — id "GL-NN", term, definition, bounded_context. If the SAME
+  term means different things in two contexts, give it TWO entries (one per context): that
+  divergence is the signal to split a context.
+- relationships: (only for a MULTI-context change) the typed Context-Map edges — id "REL-NN",
+  upstream, downstream, kind (one of: Partnership, Customer/Supplier, Conformist, Anti-Corruption
+  Layer, Shared Kernel, Open Host Service / Published Language), mechanism ("sync (REST)" /
+  "async (event)"). The kind dictates how the two contexts integrate.
+- sagas: (only when a business action spans services) the Saga / Process Manager — id "SAGA-NN",
+  name, trigger, kind (Orchestration | Choreography), and steps, each with a service, action,
+  success_event, and COMPENSATION (the undo). Prefer a SHORT saga; a long one signals a wrong
+  boundary.
 
 ## Each tech_spec (one bounded context) — core design sections
 - bounded_context: the context name (e.g. "Orders", "Payment", "Inventory").
@@ -54,6 +70,20 @@ satisfies the requirement; do not over-engineer; do not split one cohesive conte
 - invariants: the domain invariants enforced INSIDE the aggregate as guard clauses —
   state-machine legality, amount/stock non-negativity, terminal-state immutability,
   tenant match. Phrase each as a checkable rule (these drive the domain test cases).
+- commands / events / policies / read_models: the event flow (template A5) — fill these
+  ONLY for an event-driven context; OMIT them (leave empty) for a plain CRUD change:
+    * commands: id "CMD-NN", name (imperative), actor, aggregate (target), input, precondition.
+    * events: id "EVT-NN", name (PAST tense), aggregate (emitter), data (payload it carries).
+    * policies: id "POL-NN", rule "When EVT-x then CMD-y", with when_event=EVT-x and
+      then_command=CMD-y referencing DECLARED ids — a policy is the source of an async flow.
+    * read_models: id "RM-NN", name, source_events (EVT ids), serves (the screen / query).
+  Set traces_to on each flow element to the US/AC it derives from.
+- apis / event_schemas: the integration contracts (template A8) — fill ONLY for a context
+  that exposes an endpoint or publishes a message; OMIT for an internal-only change:
+    * apis: id "API-NN", method, path, summary, auth, idempotency (Idempotency-Key for POST).
+    * event_schemas: id "EVS-NN", event_name ("order.created.v1"), consumers (BCs), channel
+      (topic), versioning (".vN"), reliability ("retry → DLQ; idempotent consumer").
+  Set traces_to to the CMD/EVT/REL it realizes.
 - erd: a Mermaid `erDiagram` (or concise schema) for this context's tables.
 - key_flows: a Mermaid `sequenceDiagram` for the main happy path (+ compensation if
   relevant).
@@ -71,6 +101,10 @@ Produce concrete cases that pin the behavior. For EACH case give:
 - spec: the case as setup → action → assert, naming the expected DomainException code
   (e.g. DomainException(AMOUNT_MISMATCH), InvalidTransitionException, INSUFFICIENT_STOCK,
   TENANT_MISMATCH) and the state left behind. This is the binding specification.
+- traces_to: the requirement id(s) this case satisfies — the `AC-*` (and any `NFR-*`)
+  from the Requirements section it pins. REQUIRED whenever a Requirements section is
+  provided: every acceptance criterion must be covered by at least one LOCKED case
+  (path+content) whose traces_to names it, and no locked case may trace to nothing.
 - For "domain" and "adapter" cases: ALSO give an executable JUnit5 test — `path`
   (under src/test/...), full `content` — that encodes the spec. These get locked as
   the oracle the Coder must satisfy. Cover the happy path AND key edge/error cases;
@@ -182,6 +216,21 @@ def _conventions_section(profile: ProjectProfile) -> str:
     return "".join(parts)
 
 
+def _format_requirements(spec: RequirementSpec) -> str:
+    """Render the structured requirements contract (Slice A) as a prompt section. The
+    US/AC/NFR ids are BINDING: every acceptance criterion must be covered by a proposed
+    test, and every NFR addressed by the design. Threading those ids onto each artifact
+    (traces_to) is Slice B; here they are the visible contract the design must satisfy."""
+    return (
+        "\n\n" + render_requirement_section(spec) + "\n\n"
+        "DESIGN CONTRACT: every acceptance criterion (AC-*) above MUST be covered by at "
+        "least one LOCKED test case (path+content) whose `traces_to` lists that AC id, and "
+        "every NFR (NFR-*) MUST be addressed by the design (a decision, an invariant, or a "
+        "test). Set `traces_to` on every test case to the requirement id(s) it satisfies. "
+        "Do not contradict or silently widen the stated scope."
+    )
+
+
 def _format_analysis(analysis: AnalysisSpec) -> str:
     """Render the upstream AnalysisSpec as a prompt section so the proposed tests
     trace to the explicit, human-visible acceptance criteria (ADR-08 Slice 3)."""
@@ -205,13 +254,16 @@ class LLMDesigner:
         self._cap = max_repo_map_chars
 
     def propose_design(
-        self, requirement: str, repo_map: str, analysis: AnalysisSpec | None = None
+        self, requirement: str, repo_map: str, analysis: AnalysisSpec | None = None,
+        spec: RequirementSpec | None = None,
     ) -> DesignSpec:
         user = (
             f"# Requirement\n{requirement}\n\n"
             f"# Repo Map (skeleton — request full symbols later via zoom-in)\n"
             f"{repo_map[: self._cap]}"
         )
+        if spec is not None:
+            user += _format_requirements(spec)
         if analysis is not None:
             user += _format_analysis(analysis)
         return generate_structured(
@@ -222,6 +274,7 @@ class LLMDesigner:
     def revise_design(
         self, requirement: str, repo_map: str, previous: DesignSpec,
         issues: list[str], analysis: AnalysisSpec | None = None,
+        spec: RequirementSpec | None = None,
     ) -> DesignSpec:
         """Re-emit a corrected DesignSpec that resolves the deterministic linter's
         consistency findings (design-heal, M07). Same scope/contexts as `previous`."""
@@ -233,6 +286,8 @@ class LLMDesigner:
             f"{render_contracts(previous)}\n\n"
             f"# Consistency issues a deterministic linter found (FIX ALL)\n{problems}"
         )
+        if spec is not None:
+            user += _format_requirements(spec)
         if analysis is not None:
             user += _format_analysis(analysis)
         return generate_structured(
