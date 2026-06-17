@@ -74,6 +74,11 @@ class DesignConfig(BaseModel):
     # Where the design artifacts (AD + one Tech Spec per bounded context) are written
     # in the target worktree, so they commit alongside the change.
     docs_dir: str = "docs/design"
+    # Which design-artifact formats to emit. "markdown" (default) = the SAD-style AD +
+    # Tech Specs + Test Cases. Add "structurizr" to ALSO emit Architecture-as-Code:
+    # a master workspace.dsl (C4 model + views, ≈ the AD) plus one .dsl fragment per
+    # bounded context (≈ a Tech Spec), generated from the same validated DesignSpec.
+    formats: list[str] = Field(default_factory=lambda: ["markdown"])
 
 
 class DeployConfig(BaseModel):

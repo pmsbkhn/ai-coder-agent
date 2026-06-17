@@ -41,6 +41,7 @@ from aicoder.application.design_docs import (
     tech_spec_path,
     test_cases_path,
 )
+from aicoder.application.design_structurizr import render_structurizr
 from aicoder.application.design_lint import (
     lint_design,
     lint_event_flow,
@@ -451,6 +452,11 @@ class Orchestrator:
         for ts in spec.tech_specs:
             _write(tech_spec_path(ts, docs_dir), render_tech_spec(ts, docs_dir))
             _write(test_cases_path(ts, docs_dir), render_test_cases(ts, docs_dir))
+        # Architecture-as-Code (opt-in): the same DesignSpec rendered as Structurizr DSL —
+        # a master workspace.dsl (≈ AD) + one fragment per context (≈ Tech Spec).
+        if "structurizr" in self._profile.design.formats:
+            for path, content in render_structurizr(spec, requirement, f"{docs_dir}/structurizr").items():
+                _write(path, content)
         return paths
 
     def _maybe_deploy(self, session: AgentSession, workdir: str, prompt: str) -> None:
