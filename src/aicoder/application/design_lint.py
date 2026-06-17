@@ -567,11 +567,40 @@ def lint_integration(spec: DesignSpec, req_spec: RequirementSpec | None = None) 
     return out
 
 
+def _traces(items) -> str:
+    """`→ AC-01, AC-02` for an element carrying `traces_to` (empty string when none)."""
+    ids = ", ".join(getattr(items, "traces_to", []) or [])
+    return f" → {ids}" if ids else ""
+
+
 def render_contracts(spec: DesignSpec) -> str:
-    """A compact, per-context digest of the binding contracts (interfaces, invariants,
-    domain model, key flows) — fed to the adversarial Reviewer so it can judge the
-    tests AGAINST the contracts, not in a vacuum."""
+    """A compact, per-context digest of the binding contracts — fed to (a) the adversarial
+    Reviewer so it judges the tests AGAINST the contracts, and (b) the Designer on a
+    design-heal REVISE (designer_llm.revise_design), which otherwise sees only this digest,
+    not the full previous DesignSpec. So the digest MUST name every droppable element —
+    event flow, integration contracts, the test→requirement traces, and the system-level
+    relationships/sagas — or a revise pass silently forgets them. Compact (ids + labels,
+    no test bodies) to stay token-cheap."""
     blocks: list[str] = []
+
+    # System-level structure (droppable on a revise that only sees the per-context digest).
+    sys_lines: list[str] = []
+    if spec.relationships:
+        sys_lines.append("Context relationships:")
+        sys_lines += [f"  - {r.id} {r.upstream}→{r.downstream} [{r.kind.value}; "
+                      f"{r.mechanism}]" for r in spec.relationships]
+    if spec.sagas:
+        sys_lines.append("Sagas:")
+        sys_lines += [f"  - {s.id} {s.name} ({s.kind}, {len(s.steps)} steps)" for s in spec.sagas]
+    if spec.use_cases:
+        sys_lines.append("Use cases: "
+                         + "; ".join(f"{u.id} {u.name}{_traces(u)}" for u in spec.use_cases))
+    if spec.glossary:
+        sys_lines.append("Glossary: "
+                         + "; ".join(f"{g.id} {g.term}@{g.bounded_context}" for g in spec.glossary))
+    if sys_lines:
+        blocks.append("## System\n" + "\n".join(sys_lines))
+
     for ts in spec.tech_specs:
         lines = [f"## {ts.bounded_context}"]
         if ts.interface_changes:
@@ -584,5 +613,26 @@ def render_contracts(spec: DesignSpec) -> str:
             lines += ["Domain model:", ts.domain_model.strip()]
         if ts.key_flows.strip():
             lines += ["Key flows:", ts.key_flows.strip()]
+        # Event flow (template A5) — name each element so a revise keeps them.
+        if ts.commands or ts.events or ts.policies or ts.read_models:
+            lines.append("Event flow:")
+            lines += [f"  - {c.id} {c.name} (cmd){_traces(c)}" for c in ts.commands]
+            lines += [f"  - {e.id} {e.name} (evt){_traces(e)}" for e in ts.events]
+            lines += [f"  - {p.id} ({p.when_event}→{p.then_command}) (policy){_traces(p)}"
+                      for p in ts.policies]
+            lines += [f"  - {r.id} {r.name} (read-model){_traces(r)}" for r in ts.read_models]
+        # Integration contracts (template A8).
+        if ts.apis or ts.event_schemas:
+            lines.append("Integration:")
+            lines += [f"  - {a.id} {a.method} {a.path}{_traces(a)}" for a in ts.apis]
+            lines += [f"  - {e.id} {e.event_name} → {', '.join(e.consumers)}{_traces(e)}"
+                      for e in ts.event_schemas]
+        # Tests + their requirement traces (NOT the bodies) — so a revise does not drop
+        # coverage or re-derive traces_to from scratch.
+        if ts.test_plan:
+            lines.append("Tests (id [title] → traces):")
+            lines += [f"  - {t.id} [{t.title}]{_traces(t)}"
+                      + ("" if (t.path and t.content) else " (spec-only)")
+                      for t in ts.test_plan]
         blocks.append("\n".join(lines))
     return "\n\n".join(blocks)

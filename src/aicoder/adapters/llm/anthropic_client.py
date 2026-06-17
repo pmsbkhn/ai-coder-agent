@@ -9,16 +9,22 @@ from anthropic import Anthropic
 from aicoder.adapters.llm.base import LLMError
 
 DEFAULT_MODEL = "claude-sonnet-4-6"  # cost/quality sweet spot for a coding agent
+_DEFAULT_CONTEXT_TOKENS = 200_000     # Claude models — large window; the guard rarely fires
 
 
 class AnthropicClient:
-    def __init__(self, model: str = DEFAULT_MODEL, *, max_tokens: int = 4096) -> None:
+    def __init__(
+        self, model: str = DEFAULT_MODEL, *, max_tokens: int = 4096,
+        context_tokens: int = _DEFAULT_CONTEXT_TOKENS,
+    ) -> None:
         api_key = os.environ.get("ANTHROPIC_API_KEY")
         if not api_key:
             raise LLMError("ANTHROPIC_API_KEY is not set")
         self._client = Anthropic(api_key=api_key)
         self.model = model
         self._max_tokens = max_tokens
+        # Usable context window for the prompt-budget guard (structured.py).
+        self.context_tokens = context_tokens
 
     def complete_json(
         self, *, system: str, user: str, json_schema: dict, tool_name: str = "emit"

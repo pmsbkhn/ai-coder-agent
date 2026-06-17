@@ -8,13 +8,17 @@ is what lets the harness stay reliable as model IQ drops.
 
 from __future__ import annotations
 
+import logging
 from typing import TypeVar
 
 from pydantic import BaseModel, ValidationError
 
 from aicoder.adapters.llm.base import LLMClient, LLMError
+from aicoder.adapters.llm.budget import prompt_fits
 
 T = TypeVar("T", bound=BaseModel)
+
+_log = logging.getLogger("aicoder.llm")
 
 
 def generate_structured(
@@ -27,6 +31,21 @@ def generate_structured(
 ) -> T:
     schema = model_cls.model_json_schema()
     tool_name = f"emit_{model_cls.__name__.lower()}"
+
+    # Context-budget guard: if the assembled prompt likely exceeds the model's usable
+    # window, WARN loudly rather than let the provider silently truncate it (which would
+    # make the model "forget" part of the contract with no error). The schema is part of
+    # the system prompt for json_object providers, so count it too.
+    ctx = getattr(client, "context_tokens", None)
+    fits, est, usable = prompt_fits(system + str(schema), user, context_tokens=ctx)
+    if not fits:
+        _log.warning(
+            "prompt for %s (~%d tokens) likely exceeds the model's usable context "
+            "(~%d of %s tokens) — output may be SILENTLY TRUNCATED. Raise "
+            "AICODER_LLM_NUM_CTX or shrink inputs (e.g. the repo-map cap).",
+            model_cls.__name__, est, usable, ctx,
+        )
+
     current_user = user
     last_error: Exception | None = None
 
