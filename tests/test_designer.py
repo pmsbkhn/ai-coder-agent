@@ -636,3 +636,35 @@ def test_designer_prompt_carries_completeness_rule() -> None:
     LLMDesigner(llm, _PROFILE.model_copy(update={"conventions": [], "design_exemplar": ""})
                 ).propose_design("x", "repo-map")
     assert "CLOSURE RULE" in llm.system and "ENUMERATE EVERY PORT" in llm.system
+
+
+# --- Structurizr (AaC) emission is profile-gated --------------------------------
+
+def test_structurizr_written_when_profile_opts_in() -> None:
+    mem = InMemoryMemory()
+    gw = _RecordingGateway()
+    prof = _PROFILE.model_copy(update={"design": _PROFILE.design.model_copy(
+        update={"formats": ["markdown", "structurizr"]})})
+    orch = Orchestrator(
+        profile=prof, planner=FakePlanner(Plan(tasks=[Task(id="t1", description="x", target_files=["A.java"])])),
+        coder=FakeCoder(), memory=mem, gateway=gw, build=FakeBuild([_passed()]),
+        designer=FakeDesigner(_RICH_DESIGN), design_mode="always", approval=_Approval(True),
+    )
+    orch.run_requirement("x")
+    assert "docs/design/structurizr/workspace.dsl" in gw.writes
+    assert any(p.startswith("docs/design/structurizr/") and p.endswith(".dsl")
+               and "workspace" not in p for p in gw.writes)  # at least one fragment
+
+
+def test_structurizr_skipped_when_markdown_only() -> None:
+    mem = InMemoryMemory()
+    gw = _RecordingGateway()
+    prof = _PROFILE.model_copy(update={"design": _PROFILE.design.model_copy(
+        update={"formats": ["markdown"]})})
+    orch = Orchestrator(
+        profile=prof, planner=FakePlanner(Plan(tasks=[Task(id="t1", description="x", target_files=["A.java"])])),
+        coder=FakeCoder(), memory=mem, gateway=gw, build=FakeBuild([_passed()]),
+        designer=FakeDesigner(_RICH_DESIGN), design_mode="always", approval=_Approval(True),
+    )
+    orch.run_requirement("x")
+    assert not any("structurizr" in p for p in gw.writes)

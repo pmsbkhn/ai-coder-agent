@@ -44,6 +44,11 @@ healing:
   reset_to_clean: true                   # each attempt starts from a clean worktree
   no_progress_breaker: true              # trip early if the error signature repeats
 
+design:
+  # Emit the SAD-style Markdown set AND Architecture-as-Code: a master workspace.dsl
+  # (C4 model + views) + one .dsl fragment per bounded context, from the same DesignSpec.
+  formats: [markdown, structurizr]
+
 # Framework DESIGN conventions — reusable MSFW domain primitives the Analyst and
 # Designer must PREFER over re-inventing (prompt-level guidance; deterministic
 # enforcement stays in the ArchUnit/MsfwFitness gate above). Source: global house rules.
