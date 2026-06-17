@@ -556,7 +556,10 @@ def lint_integration(spec: DesignSpec, req_spec: RequirementSpec | None = None) 
                 f"saga is a boundary smell; consider whether two contexts it spans should "
                 f"merge (design-flow Bước 5 → quay lại Bước 3)."
             )
-    sync = [r for r in spec.relationships if "sync" in (r.mechanism or "").lower()]
+    # "sync" is a substring of "async" — exclude async mechanisms explicitly so an
+    # event-driven relationship ("async (event)") is not miscounted as synchronous.
+    sync = [r for r in spec.relationships
+            if "sync" in (m := (r.mechanism or "").lower()) and "async" not in m]
     if len(sync) > _MAX_SYNC_RELATIONSHIPS:
         ids = ", ".join(r.id for r in sync)
         out.append(
