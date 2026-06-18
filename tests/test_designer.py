@@ -305,13 +305,13 @@ _INCONSISTENT_DESIGN = {
          "affected": ["src/main/java/lib/catalog/Copy.java",
                       "src/main/java/lib/catalog/CatalogService.java"],
          "interface_changes": ["interface CatalogService { Optional<Copy> findCopy(UUID id); }"],
-         "test_plan": [{"path": "src/test/java/CatT.java", "content": "//", "rationale": "x"}]},
+         "test_plan": [{"path": "src/test/java/CatT.java", "content": "@Test void t() { assertEquals(1, x); }", "rationale": "x"}]},
         {"bounded_context": "Lending", "summary": "loans",
          "affected": ["src/main/java/lib/lending/Loan.java"],
          "interface_changes": ["interface LendingService { Loan createLoan(UUID copyId); }"],
          "key_flows": "sequenceDiagram\n  LoanAggregate->>CatalogService: setCopyStatus(ON_LOAN)\n"
                       "  CatalogService-->>LendingService: Copy(AVAILABLE)",
-         "test_plan": [{"path": "src/test/java/LenT.java", "content": "//", "rationale": "y"}]},
+         "test_plan": [{"path": "src/test/java/LenT.java", "content": "@Test void t() { assertEquals(1, x); }", "rationale": "y"}]},
     ],
 }
 
@@ -375,12 +375,12 @@ _REPAIRED_DESIGN = {
                       "src/main/java/lib/catalog/CatalogService.java"],
          "interface_changes": ["interface CatalogService { Optional<Copy> findCopy(UUID id); "
                                "void setCopyStatus(UUID id, CopyStatus s); }"],
-         "test_plan": [{"path": "src/test/java/CatT.java", "content": "//", "rationale": "x"}]},
+         "test_plan": [{"path": "src/test/java/CatT.java", "content": "@Test void t() { assertEquals(1, x); }", "rationale": "x"}]},
         {"bounded_context": "Lending", "summary": "loans",
          "affected": ["src/main/java/lib/lending/Loan.java"],
          "interface_changes": ["interface LendingService { Loan createLoan(UUID copyId); }"],
          "key_flows": "sequenceDiagram\n  LoanAggregate->>CatalogService: setCopyStatus(id, ON_LOAN)",
-         "test_plan": [{"path": "src/test/java/LenT.java", "content": "//", "rationale": "y"}]},
+         "test_plan": [{"path": "src/test/java/LenT.java", "content": "@Test void t() { assertEquals(1, x); }", "rationale": "y"}]},
     ],
 }
 
@@ -395,7 +395,7 @@ _COLLAPSED_DESIGN = {
          "affected": ["src/main/java/lib/lending/Loan.java",
                       "src/main/java/lib/lending/Copy.java"],
          "interface_changes": ["interface LendingService { Loan createLoan(UUID copyId); }"],
-         "test_plan": [{"path": "src/test/java/LenT.java", "content": "//", "rationale": "y"}]},
+         "test_plan": [{"path": "src/test/java/LenT.java", "content": "@Test void t() { assertEquals(1, x); }", "rationale": "y"}]},
     ],
 }
 
@@ -477,10 +477,10 @@ _TWO_BC = {
     "tech_specs": [
         {"bounded_context": "Orders", "summary": "order side",
          "affected": ["Order.java"], "interface_changes": [], "adr_notes": "",
-         "test_plan": [{"path": "src/test/java/OrdersT.java", "content": "//", "rationale": "x"}]},
+         "test_plan": [{"path": "src/test/java/OrdersT.java", "content": "@Test void t() { assertEquals(1, x); }", "rationale": "x"}]},
         {"bounded_context": "Payment", "summary": "payment side",
          "affected": ["Escrow.java"], "interface_changes": [], "adr_notes": "",
-         "test_plan": [{"path": "src/test/java/PaymentT.java", "content": "//", "rationale": "y"}]},
+         "test_plan": [{"path": "src/test/java/PaymentT.java", "content": "@Test void t() { assertEquals(1, x); }", "rationale": "y"}]},
     ],
 }
 
