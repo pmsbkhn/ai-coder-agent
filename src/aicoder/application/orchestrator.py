@@ -42,6 +42,7 @@ from aicoder.application.design_docs import (
     test_cases_path,
 )
 from aicoder.application.design_structurizr import render_structurizr
+from aicoder.application.structurizr_lint import validate_structurizr
 from aicoder.application.design_lint import (
     lint_design,
     lint_event_flow,
@@ -370,7 +371,11 @@ class Orchestrator:
         # Materialize the explicit design artifacts: one umbrella AD + one Tech Spec
         # per bounded context (1 BC = 1 Tech Spec), written into the worktree so they
         # are reviewable and commit alongside the change.
-        docs = self._write_design_docs(workdir, design, prompt, applied, spec)
+        docs, struct_issues = self._write_design_docs(workdir, design, prompt, applied, spec)
+        # A non-empty structurizr validation joins the deterministic lint channel: it
+        # surfaces at the architect gate and blocks under review_strict (a renderer bug
+        # should never ship docs that the CLI would reject).
+        lint_issues = [*lint_issues, *struct_issues]
         self._log(session, "DESIGN_PROPOSED", {
             "summary": design.summary[:500],
             "bounded_contexts": design.bounded_contexts,
@@ -443,7 +448,7 @@ class Orchestrator:
     def _write_design_docs(
         self, workdir: str, spec, requirement: str, applied: dict[str, str],
         req_spec: RequirementSpec | None = None,
-    ) -> list[str]:
+    ) -> tuple[list[str], list[str]]:
         """Render + write the AD (umbrella, SAD-style) and, per bounded context, one
         Tech Spec + one Test Cases doc (1 BC = 1 Tech Spec). When a structured intake was
         supplied (Slice B), ALSO write a requirements.md (US/NFR tables + the AC→test
@@ -465,12 +470,19 @@ class Orchestrator:
         for ts in spec.tech_specs:
             _write(tech_spec_path(ts, docs_dir), render_tech_spec(ts, docs_dir))
             _write(test_cases_path(ts, docs_dir), render_test_cases(ts, docs_dir))
-        # Architecture-as-Code (opt-in): the same DesignSpec rendered as Structurizr DSL —
-        # a master workspace.dsl (≈ AD) + one fragment per context (≈ Tech Spec).
+        # Architecture-as-Code (opt-in): the same DesignSpec rendered as a marketplace-grade
+        # Structurizr set (C4 + 42010) — workspace + styles + per-context fragments + the
+        # embedded documentation/ADRs. `structurizr-ci` also emits a pinned CI workflow.
+        struct_issues: list[str] = []
         if "structurizr" in self._profile.design.formats:
-            for path, content in render_structurizr(spec, requirement, f"{docs_dir}/structurizr").items():
+            with_ci = "structurizr-ci" in self._profile.design.formats
+            files = render_structurizr(spec, requirement, f"{docs_dir}/structurizr", with_ci=with_ci)
+            # Pure-Python regression guard over the rendered DSL (the real parse runs in CI).
+            # If the generator is correct this is empty; non-empty joins the lint channel.
+            struct_issues = validate_structurizr(files)
+            for path, content in files.items():
                 _write(path, content)
-        return paths
+        return paths, struct_issues
 
     def _maybe_deploy(self, session: AgentSession, workdir: str, prompt: str) -> None:
         """M6 gated deploy: only for a green change, only with a configured deploy
