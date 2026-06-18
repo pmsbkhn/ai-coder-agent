@@ -41,6 +41,7 @@ lint-imports` → 3 contracts kept. Milestones **M0–M6 DONE**, all on `main`.
 | L10 | **Repo map is a static skeleton** | no call-graph / dependency intelligence | graph-DB deferred; jdeps/LSP on demand (AD-12) |
 | L11 | **No security review of generated code** beyond arch + tests | a passing change could still be insecure | future: a security-lint gate in the Verifier |
 | L12 | **Single-target generality unproven** | only MSFW + the framework-free eval target exist | don't generalize until a 2nd real stack (AD-7) |
+| L13 | **Propose-time under-decomposition** on high-coupling multi-context intakes | the Designer sometimes models a genuinely 3-context system as ONE megacontext from the start (gpt-oss non-determinism: same intake gave 3 BCs one run, 1 BC the next) | heal-time *collapse* is now guarded (design-heal rejects a revise that drops a BC), but the guard cannot *force* a decomposition the model never proposed — steer the Designer to honor the intake's story→context structure |
 
 ## 6.3 Roadmap (next) — core M0–M6 done; remaining is depth & polish
 
@@ -50,6 +51,7 @@ lint-imports` → 3 contracts kept. Milestones **M0–M6 DONE**, all on `main`.
 - **L8 → make PostgresMemory the default** (with `docker compose up`) and add **resume** (re-enter a non-terminal session) for free durability.
 
 **Medium-term (depth)**
+- **L13 → stabilize propose-time decomposition**: steer the Designer to honor the structured intake's story/concern boundaries so a multi-concern system reliably yields multiple bounded contexts instead of collapsing into one megacontext on coupled domains. Complements the heal-time BC-drop guard (which only prevents *losing* contexts during heal, not under-proposing them up front).
 - **L5 → wire RAG**: embed profile `seed_docs` into `knowledge_chunk`, retrieve top-k into the Planner/Coder context (the store + schema already exist).
 - **L6 → harden the sandbox**: non-root user, read-only rootfs, CPU/pids limits; a dedicated offline `.m2` volume.
 - **L3 → close model headroom**: re-run `escrow-close` as models improve; it's the standing "did we get better?" probe.

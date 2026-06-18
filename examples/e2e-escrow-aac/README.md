@@ -33,8 +33,11 @@ uv run python -m aicoder \
 | `design/AD.md` | SAD-style Architecture Description (system level) |
 | `design/techspec-*.md` | One Tech Spec per bounded context (Seller / Order / Escrow) |
 | `design/testcases-*.md` | TC-XXX-NN cases per context (the locked oracle) |
-| `design/structurizr/workspace.dsl` | **Master AaC file (≈ AD)** — C4 model + System Context / Container / Component views |
+| `design/structurizr/workspace.dsl` | **Master AaC file (≈ AD)** — C4 model + System Context / Container / Component views, datastores (DB-per-service), `!docs` + `!adrs` |
 | `design/structurizr/{seller,order,escrow}.dsl` | **Child AaC files (≈ Tech Specs)** — components per context, `!include`d by the master |
+| `design/structurizr/styles.dsl` | Tag → shape/colour (form separated from content) |
+| `design/structurizr/documentation/*.md` | Prose embedding the views via `embed:` (`!docs`) |
+| `design/structurizr/adr/NNNN-*.md` | MADR-lite decisions, numbered-only (`!adrs`) |
 | [`run-trace.txt`](run-trace.txt) | Full execution trace |
 
 ## Result
@@ -51,7 +54,13 @@ uv run python -m aicoder \
 
 - The DSL is generated **deterministically from the validated `DesignSpec`** — the LLM
   never writes DSL, so it is valid by construction and the L/T consistency linter still
-  governs the design.
+  governs the design. "Valid by construction" is now **checked, not asserted**: a
+  pure-Python guard (`structurizr_lint`) runs at generation time and a real
+  `structurizr/cli` parse runs in CI (pinned to a dated tag — never `:latest`, which is a
+  no-op stub that would validate nothing).
+- Deterministic-only fidelity gaps (honest): there is **no deployment/operations view**
+  (replicas/namespaces aren't in the `DesignSpec`), ADRs are MADR-lite from free-text
+  decisions, and datastore technology is generic (`Datastore`).
 - Component identifiers are **namespaced by container** (`escrow_escrow`) because
   Structurizr identifiers are global.
 - The Component views are derived from the free-text `interface_changes` / `domain_model`
