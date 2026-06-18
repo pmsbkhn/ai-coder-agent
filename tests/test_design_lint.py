@@ -141,7 +141,9 @@ def test_render_contracts_includes_interfaces_and_flows() -> None:
 # L5–L7: oracle & traceability quality (separate from code-build consistency)
 # --------------------------------------------------------------------------- #
 
-def _domain_case(id_: str, path: str = "", content: str = "x") -> dict:
+def _domain_case(id_: str, path: str = "",
+                 content: str = "@Test void t() { assertEquals(1, x); }") -> dict:
+    # a locked oracle carries an assertion (else L10 flags it as pinning nothing)
     return {"id": id_, "title": id_, "kind": "domain",
             "spec": "given x when y then z", "path": path,
             "content": content if path else ""}

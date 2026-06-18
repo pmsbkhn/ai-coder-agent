@@ -140,6 +140,23 @@ _FLOW_KEYWORDS = {"alt", "opt", "loop", "par", "note", "activate", "deactivate",
 _SERVICE_SUFFIXES = ("Service", "Port", "Repository", "Controller", "Facade",
                      "Adapter", "Oa", "Manager", "Client", "Gateway")
 
+# Oracle-quality patterns (Slice E — step-6 test adequacy). An assertion of ANY framework
+# (JUnit assert*, AssertJ assertThat, Mockito verify(), assertThrows) — a test body with none
+# pins nothing. A substring-only oracle asserts a message merely "contains" text. A perf hint
+# marks a case that claims a latency/throughput target.
+_ASSERTION = re.compile(r"\b(assert\w*|verify|assertThat|verifyNoInteractions)\s*\(")
+_SUBSTRING_ASSERT = re.compile(r"\.contains\s*\(|containsString\s*\(|containsIgnoringCase\s*\(")
+_VALUE_ASSERT = re.compile(r"assertEquals|assertSame|assertArrayEquals|isEqualTo|isSameAs|==")
+_PERF_HINT = re.compile(r"\b(p9\d|latency|throughput|benchmark|\d+\s*ms\b|millis|qps|per second)\b",
+                        re.IGNORECASE)
+_TIMING = re.compile(r"\bms\b|millis|nano|Duration|Instant|System\.(nano|current)|StopWatch", re.IGNORECASE)
+# A starting points balance and a points amount spent, parsed only when each appears EXACTLY
+# once in the case text (else pairing is ambiguous and we skip — high precision over recall).
+_BALANCE = re.compile(r"\b(?:with|of|has|having)\s+(\d{2,})\s+points?\b", re.IGNORECASE)
+_SPENT = re.compile(
+    r"\b(?:spends?|spent|redeems?|redeemed|reduces?\s+by|deducts?|deducted)\D{0,20}?(\d{2,})\s*points?",
+    re.IGNORECASE)
+
 
 def _arity(params: str) -> int:
     return len([p for p in params.split(",") if p.strip()])
@@ -441,6 +458,33 @@ def lint_design(spec: DesignSpec, req_spec: RequirementSpec | None = None) -> li
                 f"others reference (map arrows point TO it)."
             )
 
+    # L10 — a locked, non-fitness test whose body asserts NOTHING (no assert*/verify/assertThat).
+    # It compiles and passes against any implementation, so it pins no behaviour. Drives heal.
+    for ts in spec.tech_specs:
+        for t in ts.test_plan:
+            if t.kind == "fitness" or not t.content:
+                continue
+            if not _ASSERTION.search(t.content):
+                issues.append(
+                    f"L10 locked test `{t.id or t.path}` [{ts.bounded_context}] has no assertion "
+                    f"in its body (no assert*/verify/assertThat) — it constrains nothing and any "
+                    f"implementation passes. Add an assertion that pins the expected behaviour."
+                )
+
+    # L11 — a case spends/redeems MORE points than the starting balance it states: a logical
+    # impossibility (violates a non-negative-balance invariant). Parsed only when the balance
+    # and the spent amount each appear exactly once in the case text (else skipped — precision).
+    for ts in spec.tech_specs:
+        for t in ts.test_plan:
+            text = f"{t.title} {t.spec}"
+            bals, spends = _BALANCE.findall(text), _SPENT.findall(text)
+            if len(bals) == 1 and len(spends) == 1 and int(spends[0]) > int(bals[0]):
+                issues.append(
+                    f"L11 case `{t.id or t.title}` [{ts.bounded_context}] spends {spends[0]} points "
+                    f"from a stated balance of {bals[0]} — impossible (balance would go negative). "
+                    f"Fix the numbers or the cap logic so spent ≤ balance."
+                )
+
     # --- Traceability (Slice B) — only when a structured requirements intake exists.
     if req_spec is not None:
         known = set(req_spec.acceptance_ids) | set(req_spec.nfr_ids)
@@ -567,6 +611,40 @@ def lint_integration(spec: DesignSpec, req_spec: RequirementSpec | None = None) 
             f"({ids}) — high sync coupling suggests the Bước-3 boundaries may be wrong; "
             f"consider merging the tightly-coupled contexts."
         )
+    return out
+
+
+def lint_oracle(spec: DesignSpec, req_spec: RequirementSpec | None = None) -> list[str]:
+    """Oracle-adequacy (ADVISORY, Slice E / step-6). The HARD step-6 checks (a no-assertion
+    test L10, an impossible spend L11) live in `lint_design`; these are the softer smells that
+    should reach the architect but not auto-block, because a unit test legitimately cannot
+    always enforce them:
+
+      O1  a case targeting a PERFORMANCE metric (p95 / latency / throughput) that locks no
+          timing measurement — the NFR is documented but the test cannot enforce it.
+      O2  a case whose ONLY assertions are substring matches (`.contains(...)`) with no
+          value/equality assertion — a weak oracle that passes on a roughly-right message.
+
+    Never blocks / heals. Empty when no test exhibits the smell."""
+    out: list[str] = []
+    for ts in spec.tech_specs:
+        for t in ts.test_plan:
+            # O1 — performance target with no timing in the (executable) oracle.
+            if _PERF_HINT.search(f"{t.title} {t.spec}"):
+                if not t.content or not _TIMING.search(t.content):
+                    out.append(
+                        f"O1 case `{t.id or t.title}` [{ts.bounded_context}] targets a performance "
+                        f"metric but its oracle measures no time — an NFR like this is not enforced "
+                        f"by the test as written (consider a separate perf gate / mark it advisory)."
+                    )
+            # O2 — substring-only assertions (weak message check, no value/state assertion).
+            if t.kind != "fitness" and t.content and _ASSERTION.search(t.content) \
+                    and _SUBSTRING_ASSERT.search(t.content) and not _VALUE_ASSERT.search(t.content):
+                out.append(
+                    f"O2 case `{t.id or t.path}` [{ts.bounded_context}] asserts only via substring "
+                    f"match (.contains) — a weak oracle; assert the concrete value/state, not that a "
+                    f"message merely contains text."
+                )
     return out
 
 

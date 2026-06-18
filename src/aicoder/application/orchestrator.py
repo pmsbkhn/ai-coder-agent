@@ -48,6 +48,7 @@ from aicoder.application.design_lint import (
     lint_event_flow,
     lint_integration,
     lint_nfr_coverage,
+    lint_oracle,
     render_contracts,
 )
 from aicoder.application.profile import ProjectProfile
@@ -383,14 +384,15 @@ class Orchestrator:
             "proposed_tests": [t.path for t in design.executable_tests()],
             "repairs": repairs,
         })
-        # T2/T4/T5 are advisory: logged for the architect, never block / heal.
+        # T2/T4/T5 + oracle smells are advisory: logged for the architect, never block / heal.
         nfr_gaps = lint_nfr_coverage(design, spec)
         flow_gaps = lint_event_flow(design, spec)
         integ_gaps = lint_integration(design, spec)
+        oracle_gaps = lint_oracle(design, spec)
         self._log(session, "DESIGN_LINT",
                   {"ok": not lint_issues, "issues": lint_issues[:10], "repairs": repairs,
                    "nfr_advisory": nfr_gaps[:10], "event_flow_advisory": flow_gaps[:10],
-                   "integration_advisory": integ_gaps[:10]})
+                   "integration_advisory": integ_gaps[:10], "oracle_advisory": oracle_gaps[:10]})
 
         if self._approval is None:
             return set(), True  # Slice-1 behavior: AD + Tech Specs written + logged, not gated
