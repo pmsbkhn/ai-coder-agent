@@ -306,11 +306,24 @@ class Orchestrator:
         while issues and repairs < budget:
             self._log(session, "DESIGN_REVISED", {"attempt": repairs + 1, "fixing": issues[:10]})
             try:
-                spec = self._designer.revise_design(
+                revised = self._designer.revise_design(
                     prompt, repo_map, spec, issues, analysis, requirement_spec)
             except (AttributeError, NotImplementedError):
                 break  # Designer adapter does not support revision
             repairs += 1
+            # Anti-gaming guard: a cross-context finding (L3) is trivially cleared by
+            # MERGING bounded contexts — the model sometimes collapses the decomposition
+            # to make the linter green. Reject any revise that DROPS a bounded context;
+            # keep the last full-decomposition spec with its honest residual issues
+            # (a 3-BC design with findings beats a converged 1-BC degenerate one).
+            dropped = set(spec.bounded_contexts) - set(revised.bounded_contexts)
+            if dropped:
+                self._log(session, "DESIGN_REVISE_REJECTED",
+                          {"reason": "revise dropped bounded contexts",
+                           "dropped": sorted(dropped),
+                           "kept": sorted(spec.bounded_contexts)})
+                break  # stop healing; `spec`/`issues` stay at the last good revision
+            spec = revised
             issues = lint_design(spec, requirement_spec)
         return spec, issues, repairs
 

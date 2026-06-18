@@ -385,6 +385,36 @@ _REPAIRED_DESIGN = {
 }
 
 
+# A degenerate "revise" that CLEARS the cross-context finding by collapsing the two
+# bounded contexts into one — the linter-gaming move the guard must reject.
+_COLLAPSED_DESIGN = {
+    "summary": "Everything merged into one context.",
+    "decisions": ["Merged Catalog into Lending."],
+    "tech_specs": [
+        {"bounded_context": "Lending", "summary": "loans + copies",
+         "affected": ["src/main/java/lib/lending/Loan.java",
+                      "src/main/java/lib/lending/Copy.java"],
+         "interface_changes": ["interface LendingService { Loan createLoan(UUID copyId); }"],
+         "test_plan": [{"path": "src/test/java/LenT.java", "content": "//", "rationale": "y"}]},
+    ],
+}
+
+
+def test_design_heal_rejects_a_revise_that_drops_a_bounded_context() -> None:
+    # revise collapses 2 BCs (Catalog+Lending) into 1 (Lending) to clear the L3 finding.
+    mem = InMemoryMemory()
+    designer = FakeDesigner(_INCONSISTENT_DESIGN, revised=_COLLAPSED_DESIGN)
+    session = _heal_orch(designer, _PROFILE, mem).run_requirement("x")
+    traces = mem.get_traces(session.session_id)
+    events = [t.event_type for t in traces]
+    assert "DESIGN_REVISE_REJECTED" in events
+    rej = next(t.payload for t in traces if t.event_type == "DESIGN_REVISE_REJECTED")
+    assert rej["dropped"] == ["Catalog"]
+    # the kept design still has BOTH contexts — the collapse was not accepted
+    proposed = next(t.payload for t in traces if t.event_type == "DESIGN_PROPOSED")
+    assert sorted(proposed["bounded_contexts"]) == ["Catalog", "Lending"]
+
+
 def _heal_orch(designer, profile, mem):
     plan = Plan(tasks=[Task(id="t1", description="x", target_files=["A.java"])])
     return Orchestrator(
