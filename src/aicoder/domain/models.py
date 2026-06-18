@@ -445,6 +445,16 @@ class AnalysisSpec(BaseModel):
     ambiguous: bool = False                                   # cannot proceed responsibly w/o clarification
 
 
+class ReviewConcern(BaseModel):
+    """One adversarial-review concern, optionally linked to the requirement id(s) it
+    affects. `traces_to` lets the AC→test matrix mark a specific AC as questioned (its
+    tracing test exists but the reviewer doubts it actually pins the behaviour) — so a
+    nominally-✅ criterion is not silently trusted. Empty `traces_to` = a general concern."""
+
+    text: str = ""
+    traces_to: list[str] = Field(default_factory=list)    # AC-/NFR- ids this concern affects
+
+
 class TestReview(BaseModel):
     """An adversarial critique of a proposed TestPlan (M07 Slice 4): do the tests
     actually constrain the requirement, or are they weak / trivially satisfiable /
@@ -452,7 +462,8 @@ class TestReview(BaseModel):
     auto-block when design.review_strict is set."""
 
     ok: bool                                              # tests adequately constrain the requirement
-    concerns: list[str] = Field(default_factory=list)     # weaknesses found
+    concerns: list[str] = Field(default_factory=list)     # weaknesses found (flat text, back-compat)
+    concern_items: list[ReviewConcern] = Field(default_factory=list)  # structured: concern + traces_to
     summary: str = ""
 
 

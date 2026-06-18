@@ -407,6 +407,17 @@ class Orchestrator:
                 contracts=render_contracts(design),
             )
             self._log(session, "TEST_REVIEW", {"ok": review.ok, "concerns": review.concerns[:10]})
+            # Option B: re-render requirements.md so the AC→test matrix flags the criteria
+            # the reviewer's concerns are linked to (concern_items[].traces_to). The first
+            # render (in _write_design_docs) ran before the review existed; overwrite it now
+            # so the committed artifact a human gates on shows ⚠️ next to questioned ACs,
+            # not a bare ✅. Only when a structured intake (req_spec) drove the matrix.
+            if spec is not None:
+                docs_dir = self._profile.design.docs_dir
+                rq = requirements_path(docs_dir)
+                content = render_requirements(spec, design, docs_dir, review=review)
+                self._tool("git", "write_file", workdir=workdir, path=rq, content=content)
+                applied[rq] = content
 
         # Strict design gate: a failed adversarial review OR any deterministic lint
         # finding auto-blocks before the human gate (both are advisory when not strict).

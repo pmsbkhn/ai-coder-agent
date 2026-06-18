@@ -200,12 +200,13 @@ def _md_escape(text: str) -> str:
 
 def render_requirements(
     req_spec: RequirementSpec, design: DesignSpec | None = None,
-    docs_dir: str = _DOCS_SUBDIR,
+    docs_dir: str = _DOCS_SUBDIR, review=None,
 ) -> str:
     """The human-authored requirements contract (templates A1/A3) plus, when a design is
     available, the AC→test traceability matrix that proves every acceptance criterion is
     pinned by a locked test (the T1/T3 the linter enforces). `design` may be None to
-    render the contract alone."""
+    render the contract alone. When `review` (a TestReview) is supplied, the matrix also
+    flags the criteria an adversarial concern is linked to (Option B: concern→AC)."""
     out: list[str] = ["# Requirements\n",
                       "> Binding contract for this change — the agent designs and tests to "
                       "satisfy every `AC-*` and `NFR-*` below; it does not invent scope.\n"]
@@ -243,13 +244,18 @@ def render_requirements(
         out.append("_(none)_\n")
 
     if design is not None:
-        out.append(_render_traceability(req_spec, design))
+        out.append(_render_traceability(req_spec, design, review))
     return "\n".join(out) + "\n"
 
 
-def _render_traceability(req_spec: RequirementSpec, design: DesignSpec) -> str:
+def _render_traceability(req_spec: RequirementSpec, design: DesignSpec, review=None) -> str:
     """AC→test and NFR→test matrices computed from the proposed tests' `traces_to`. An
-    uncovered AC is flagged ⚠️ (the linter's T1 also blocks it under review_strict)."""
+    uncovered AC is flagged ⚠️ (the linter's T1 also blocks it under review_strict).
+
+    When a `review` (TestReview) is supplied, an AC that an adversarial concern is linked to
+    (`concern_items[].traces_to`) is marked ⚠️ even though a tracing test exists — ✅ here
+    means only "a locked test traces to this AC", NOT "the behaviour is verified correct";
+    the linked concern is shown so a nominally-covered criterion is not silently trusted."""
     # id -> list of test labels that trace to it (locked tests carry a 🔒)
     by_id: dict[str, list[str]] = {}
     for t in design.all_tests():
@@ -259,18 +265,36 @@ def _render_traceability(req_spec: RequirementSpec, design: DesignSpec) -> str:
         for rid in t.traces_to:
             by_id.setdefault(rid, []).append(label)
 
+    # id -> concern texts the reviewer linked to it (Option B: structured concern→AC).
+    concern_by_id: dict[str, list[str]] = {}
+    for c in (getattr(review, "concern_items", None) or []):
+        for rid in c.traces_to:
+            if c.text:
+                concern_by_id.setdefault(rid, []).append(c.text)
+
     lines = ["## Traceability (AC → locked test)\n",
-             "| AC | Covered by | Status |", "|---|---|---|"]
+             "> ✅ = a locked test traces to this AC (traceability), **not** a guarantee the "
+             "behaviour is correct. ⚠️ concern = a tracing test exists but the reviewer flagged it.\n",
+             "| AC | Covered by | Status | Review concern |", "|---|---|---|---|"]
     for ac in req_spec.acceptance_ids:
         tests = by_id.get(ac, [])
-        status = "✅" if tests else "⚠️ uncovered"
-        lines.append(f"| {ac} | {', '.join(tests) or '—'} | {status} |")
+        concerns = concern_by_id.get(ac, [])
+        if concerns:
+            status = "⚠️ concern"
+        elif tests:
+            status = "✅"
+        else:
+            status = "⚠️ uncovered"
+        lines.append(f"| {ac} | {', '.join(tests) or '—'} | {status} | "
+                     f"{_md_escape('; '.join(concerns)) if concerns else '—'} |")
     lines.append("")
     if req_spec.nfrs:
         lines += ["## Traceability (NFR → test, advisory)\n",
-                  "| NFR | Referenced by |", "|---|---|"]
+                  "| NFR | Referenced by | Review concern |", "|---|---|---|"]
         for nfr in req_spec.nfrs:
-            lines.append(f"| {nfr.id} | {', '.join(by_id.get(nfr.id, [])) or '—'} |")
+            concerns = concern_by_id.get(nfr.id, [])
+            lines.append(f"| {nfr.id} | {', '.join(by_id.get(nfr.id, [])) or '—'} | "
+                         f"{_md_escape('; '.join(concerns)) if concerns else '—'} |")
         lines.append("")
     return "\n".join(lines)
 
