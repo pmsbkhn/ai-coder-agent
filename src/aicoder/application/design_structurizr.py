@@ -85,6 +85,16 @@ def _slug(text: str, words: int = 7) -> str:
     return s or "decision"
 
 
+# A leading "ADR-01:" / "ADR 2 -" style prefix a model sometimes bakes into a decision
+# string — stripped so it is not doubled by our own numbering (ADR 0005 "ADR-01: ...").
+_ADR_PREFIX = re.compile(r"^\s*ADR[-\s]?\d+\s*[:.\-]?\s*", re.IGNORECASE)
+
+
+def _strip_adr_prefix(text: str) -> str:
+    stripped = _ADR_PREFIX.sub("", text or "", count=1).strip()
+    return stripped or (text or "").strip()
+
+
 def _classify(name: str) -> str:
     if name.endswith("UseCase"):
         return "port.in"
@@ -149,6 +159,10 @@ def render_context_dsl(ts: TechSpec) -> str:
     apps = [c[0] for c in comps if c[3] == "application"]
     doms = [c[0] for c in comps if c[3] == "domain"]
     outs = [c[0] for c in comps if c[3] == "port.out"]
+    # A persistence port is "persists via"; a remote *Gateway is "calls" — never claim a
+    # gateway is a datastore (mirrors the DB-ownership exclusion in _persistence_ports).
+    out_label = {c[0]: ("persists via" if _PERSISTENCE.search(c[1]) else "calls")
+                 for c in comps if c[3] == "port.out"}
     mids = apps or doms  # what an inbound port hands off to
     for i in ins:
         for m in mids:
@@ -157,11 +171,11 @@ def render_context_dsl(ts: TechSpec) -> str:
         for d in doms:
             lines.append(f'{a} -> {d} "operates on"')
         for o in outs:
-            lines.append(f'{a} -> {o} "persists via"')
+            lines.append(f'{a} -> {o} "{out_label[o]}"')
     if not apps:
         for d in doms:
             for o in outs:
-                lines.append(f'{d} -> {o} "persists via"')
+                lines.append(f'{d} -> {o} "{out_label[o]}"')
     return "\n".join(lines) + "\n"
 
 
@@ -359,16 +373,23 @@ def render_workspace_dsl(spec: DesignSpec, requirement: str) -> str:
         cid = _ident(ts.bounded_context)
         for pid in _persistence_ports(ts):
             m.append(f'        {pid} -> {cid}_db "reads/writes" "JDBC"')
-    # choreography: producer -> bus -> consumer(s)
+    # choreography: producer -> bus -> consumer(s). An event_schema normally lives on its
+    # PRODUCER context (design-flow A8.2), but a model may misfile an INBOUND event on the
+    # consumer's spec; detect that (the context is its own only consumer) and draw it as a
+    # consume edge (bus -> ctx) instead of a wrong "publishes" edge.
     if uses_bus:
         for ts in spec.tech_specs:
             cid = _ident(ts.bounded_context)
             for ev in ts.event_schemas:
-                m.append(f'        {cid} -> bus "publishes {_q(ev.event_name) or "events"}"')
-                for consumer in ev.consumers:
-                    consid = _ident(consumer)
-                    if consid in container_ids and consid != cid:
-                        m.append(f'        bus -> {consid} "{_q(ev.event_name) or "event"}"')
+                name = _q(ev.event_name) or "event"
+                consumer_ids = {_ident(c) for c in ev.consumers}
+                others = sorted(c for c in consumer_ids if c in container_ids and c != cid)
+                if cid in consumer_ids and not others:
+                    m.append(f'        bus -> {cid} "{name}"')          # inbound, consumed
+                else:
+                    m.append(f'        {cid} -> bus "publishes {name}"')  # produced here
+                    for c in others:
+                        m.append(f'        bus -> {c} "{name}"')
             if not ts.event_schemas and ts.events:
                 m.append(f'        {cid} -> bus "publishes domain events"')
     # actors -> the system (or the single container)
@@ -531,10 +552,12 @@ def render_adrs(spec: DesignSpec) -> dict[str, str]:
     n = 0
     entries: list[tuple[str, str, str]] = []  # (title, context, body)
     for d in spec.decisions:
-        entries.append((d, "system-wide", d))
+        clean = _strip_adr_prefix(d)
+        entries.append((clean, "system-wide", clean))
     for ts in spec.tech_specs:
         for d in ts.adrs:
-            entries.append((d, ts.bounded_context, d))
+            clean = _strip_adr_prefix(d)
+            entries.append((clean, ts.bounded_context, clean))
     for title, context, body in entries:
         n += 1
         fname = f"{n:04d}-{_slug(title)}.md"

@@ -219,6 +219,69 @@ def test_ci_workflow_pins_a_dated_tag_not_latest() -> None:
     assert "structurizr/cli:latest" not in wf
 
 
+def test_consumed_event_drawn_as_inbound_not_published() -> None:
+    # An event a context CONSUMES (its only consumer is itself) must render as bus -> ctx,
+    # never as `ctx -> bus "publishes ..."`.
+    spec = DesignSpec(summary="s", tech_specs=[
+        TechSpec(bounded_context="Loyalty", summary="earn points",
+                 interface_changes=["interface EarnUseCase { void earn(); }",
+                                    "interface LoyaltyRepository { void save(); }"],
+                 domain_model="classDiagram\n class Account { }",
+                 event_schemas=[
+                     EventSchema(id="EVS-01", event_name="order.completed.v1",
+                                 consumers=["Loyalty"], channel="orders"),       # inbound
+                     EventSchema(id="EVS-02", event_name="loyalty.pointsEarned.v1",
+                                 consumers=["Notification"], channel="loyalty"),  # produced
+                 ]),
+    ])
+    ws = render_workspace_dsl(spec, "req")
+    assert 'bus -> loyalty "order.completed.v1"' in ws            # consumed
+    assert 'loyalty -> bus "publishes order.completed.v1"' not in ws
+    assert 'loyalty -> bus "publishes loyalty.pointsEarned.v1"' in ws  # produced
+
+
+def test_published_event_fans_out_to_known_consumers() -> None:
+    spec = DesignSpec(summary="s", tech_specs=[
+        TechSpec(bounded_context="Order", summary="orders",
+                 interface_changes=["interface PlaceUseCase { void place(); }",
+                                    "interface OrderRepository { void save(); }"],
+                 domain_model="classDiagram\n class Order { }",
+                 event_schemas=[EventSchema(id="EVS-01", event_name="order.created.v1",
+                                            consumers=["Billing"], channel="orders")]),
+        TechSpec(bounded_context="Billing", summary="billing",
+                 interface_changes=["interface InvoiceUseCase { void invoice(); }",
+                                    "interface BillingRepository { void save(); }"],
+                 domain_model="classDiagram\n class Invoice { }"),
+    ])
+    ws = render_workspace_dsl(spec, "req")
+    assert 'order -> bus "publishes order.created.v1"' in ws
+    assert 'bus -> billing "order.created.v1"' in ws
+
+
+def test_adr_prefix_stripped_from_title_and_slug() -> None:
+    spec = DesignSpec(summary="s", decisions=["ADR-01: Use event-driven idempotency check"],
+                      tech_specs=[TechSpec(bounded_context="X", summary="x",
+                                           adrs=["ADR-02: Enforce cap in aggregate"])])
+    files = render_structurizr(spec, "req")
+    adr_names = [p.split("/")[-1] for p in files if "/adr/" in p]
+    assert not any(n.startswith(("0001-adr-", "0002-adr-")) for n in adr_names)
+    body = "\n".join(files[p] for p in files if "/adr/000" in p and "0000" not in p)
+    assert "# 1. Use event-driven idempotency check" in body          # prefix gone from title
+    assert "ADR-01:" not in body and "ADR-02:" not in body
+
+
+def test_gateway_edge_labeled_calls_not_persists() -> None:
+    ts = TechSpec(bounded_context="Pay", summary="payments",
+                  interface_changes=["interface ChargeUseCase { void charge(); }",
+                                     "interface PaymentRepository { void save(); }",
+                                     "interface BankGateway { void submit(); }"],
+                  domain_model="classDiagram\n class Payment { }")
+    frag = render_context_dsl(ts)
+    assert re.search(r"-> pay_paymentrepository \"persists via\"", frag)   # DB port
+    assert re.search(r"-> pay_bankgateway \"calls\"", frag)                # remote gateway
+    assert 'pay_bankgateway "persists via"' not in frag
+
+
 def test_single_context_crud_degrades_cleanly() -> None:
     spec = DesignSpec(summary="Add a health endpoint", tech_specs=[
         TechSpec(bounded_context="Ops", summary="health check",
