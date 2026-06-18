@@ -13,9 +13,18 @@ from aicoder.domain.models import (
     NFR,
     ProposedTest,
     RequirementSpec,
+    ReviewConcern,
     TechSpec,
     UserStory,
 )
+from aicoder.domain.models import TestReview as _TestReview  # alias: avoid pytest "Test*" collect
+
+
+def _matrix_row(doc: str, ac: str) -> str:
+    """The AC's row in the Traceability matrix (a 4-column row), not the US acceptance table."""
+    section = doc.split("## Traceability", 1)[1]
+    return next(ln for ln in section.splitlines()
+               if ln.startswith(f"| {ac} ") and ln.count("|") >= 4)
 
 
 def _req() -> RequirementSpec:
@@ -127,6 +136,27 @@ def test_render_requirements_has_tables_and_matrix() -> None:
     assert "## Traceability" in doc
     assert "TC-ORD-01 🔒" in doc          # locked marker in the matrix
     assert "⚠️ uncovered" in doc          # AC-02 flagged
+
+
+def test_matrix_flags_ac_with_a_linked_review_concern() -> None:
+    # AC-01 HAS a tracing locked test, but the reviewer links a concern to it: the matrix
+    # must downgrade it from ✅ to ⚠️ concern and show the concern text (Option B).
+    design = _design([_locked("TC-ORD-01", ["AC-01", "AC-02"])])
+    review = _TestReview(ok=False, concerns=["AC-01 test only checks half"],
+                         concern_items=[ReviewConcern(text="only stores, never reads back",
+                                                      traces_to=["AC-01"])])
+    doc = render_requirements(_req(), design, review=review)
+    ac01 = _matrix_row(doc, "AC-01")
+    assert "⚠️ concern" in ac01 and "only stores, never reads back" in ac01
+    # AC-02 is traced and unflagged -> stays ✅
+    assert "✅" in _matrix_row(doc, "AC-02")
+
+
+def test_matrix_without_review_is_unchanged_back_compat() -> None:
+    design = _design([_locked("TC-ORD-01", ["AC-01"])])
+    doc = render_requirements(_req(), design)            # no review
+    ac01 = _matrix_row(doc, "AC-01")
+    assert "✅" in ac01 and "⚠️ concern" not in ac01
 
 
 def test_render_ad_links_requirements_when_present() -> None:

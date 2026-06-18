@@ -44,6 +44,13 @@ contract dooms the implementation regardless of test quality.
 Set ok=true ONLY if the tests are a faithful, non-trivial spec of the requirement AND
 the tests + contracts are mutually consistent. List concrete `concerns` for every
 weakness (empty if none). Be terse and specific.
+
+ALSO return `concern_items`: one entry per concern, each with `text` (the concern) and
+`traces_to` — the exact AC-/NFR- id(s) the concern undermines (e.g. a criterion whose
+tracing test exists but does not actually pin the stated behaviour, or only covers half
+of it). Use the ids verbatim from the requirement; leave `traces_to` empty only for a
+genuinely cross-cutting concern. Keep `concerns` and `concern_items` consistent (same
+weaknesses). This linkage lets the traceability matrix flag the specific criteria at risk.
 """
 
 
